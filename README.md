@@ -14,4 +14,4 @@ There is a [CANHack toolkit demo video](https://youtu.be/dATyoWOlEJU)
 that goes into detail on how to use the toolkit, the CAN protocol hacks it
 includes, and demonstrates it attacking CAN frames in real hardware.
 
-There is also a blog post describing the [CANHack toolkit](https://kentindell.github.io/blog/2020/01/18/canhack-toolkit/).
+There is also a blog post describing the [CANHack toolkit](https://kentindell.github.io/2020/01/20/canhack-toolkit/).
