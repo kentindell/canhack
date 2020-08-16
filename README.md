@@ -15,3 +15,5 @@ that goes into detail on how to use the toolkit, the CAN protocol hacks it
 includes, and demonstrates it attacking CAN frames in real hardware.
 
 There is also a blog post describing the [CANHack toolkit](https://kentindell.github.io/2020/01/20/canhack-toolkit/).
+
+Coming soon: Raspberry Pi CAN server
