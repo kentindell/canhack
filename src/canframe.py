@@ -1,8 +1,25 @@
+from typing import Dict
+
+
 class CANFrame:
     """
     Class for calculating the bitstream of a CAN frame.
     """
-    FIELD_NAMES = ['sof', 'ida', 'idb', 'ide', 'srr', 'rtr', 'r0', 'r1', 'dlc', 'data', 'crc', 'crc_delimiter', 'ack', 'eof', 'ifs']
+    FIELD_NAMES = ['sof',
+                   'ida',
+                   'idb',
+                   'ide',
+                   'srr',
+                   'rtr',
+                   'r0',
+                   'r1',
+                   'dlc',
+                   'data',
+                   'crc',
+                   'crc_delimiter',
+                   'ack',
+                   'eof',
+                   'ifs']
 
     RED = "\x1b[31m"
     GREEN = "\x1b[32m"
@@ -36,47 +53,47 @@ class CANFrame:
         'sof': "Start of frame",
         'ida': "11 bit ID",
         'idb': "18 bit ID extension",
-        'srr': "SRR (Substitute Remote Request)",
-        'rtr': "RTR (Remote Transmit Request)",
-        'ide': "IDE (Extended ID)",
+        'srr': "SRR",
+        'rtr': "RTR",
+        'ide': "IDE",
         'r0': "Reserved 0",
         'r1': "Reserved 1",
-        'dlc': "DLC (Data Length Code)",
+        'dlc': "DLC",
         'data': "Data",
         'crc': "CRC",
         'crc_delimiter': "CRC delimiter",
         'ack': "ACK",
         'ack_delimiter': "ACK delimiter",
-        'eof': "EOF (End Of Frame)",
-        'ifs': "IFS (Inter Frame Space)"
+        'eof': "EOF",
+        'ifs': "IFS"
     }
 
-    def __init__(self, can_id: int, data: bytes = bytes([]), extended=False, remote=False, dlc=0):
+    def __init__(self, id_a: int, data: bytes = bytes([]), ide=False, rtr=False, dlc=0, id_b=0, ack=0):
         """
-
-        :param can_id: CAN identifier (either 11 bits or 29 bits)
+        :param id_a: The 11-bit part of a CAN ID
+        :param id_b: The 18-bit extended part of the ID if an extended ID frame
         :param data: 0-8 bytes for the CAN payload
-        :param extended: True if the CAN ID is 29 bits, false if 11 bits
-        :param remote: True if a CAN remote frame
-        :param dlc: The DLC is set automatically if the frame is a data frame, but can be set directly if a remote frame
+        :param ide: True if the CAN ID is 29 bits, false if 11 bits
+        :param rtr: True if a CAN remote frame
+        :param dlc: The DLC is automatically set to the length of the data field if not a remote frame
+        :param ack: The value of the ACK field (defaults to 0 to emulate another controller acknowledging the frame)
         """
-        if extended:
-            self.id_a = (can_id >> 18) & 0x7ff
-            self.id_b = can_id & 0x3ffff
-        else:
-            self.id_a = can_id & 0x7ff
-            self.id_b = 0
+        self.id_a = id_a & 0x7ff
+        self.id_b = id_b & 0x3ffff
+        self.ack = ack
 
+        if rtr and len(data) != 0:
+            raise ValueError("Cannot have remote frames with data")
         if len(data) not in range(9):
             raise ValueError("Data field must be 0..8 bytes")
 
-        self.ide = extended
-        self.rtr = remote
+        self.ide = int(ide)
+        self.rtr = int(rtr)
         self.data = data
         self.fields_position = {}
         self.fields = {}
 
-        if remote:
+        if rtr:
             self.dlc = dlc & 0xf
         else:
             self.dlc = len(data)
@@ -92,7 +109,7 @@ class CANFrame:
         # Compute the bitstream
         self._to_bitstream()
 
-    def print_field(self, fieldname: str):
+    def print_field_str(self, fieldname: str) -> str:
         """
         Prints a field of the CAN frame.
 
@@ -104,9 +121,27 @@ class CANFrame:
         value = ""
         if fieldname == 'crc':
             value = "(0x{:04x})".format(self._crc_rg)
-        if fieldname == 'data' and len(self.fields['data']) == 0:
-            description = "(No data field)"
-        print("{}{} {} {}".format(" " * start_finish.start, "^" * len(start_finish), description, value))
+        if fieldname == 'data':
+            if len(self.fields['data']) == 0:
+                description = "(No data field)"
+            else:
+                value = "({})".format(self.data)
+        if fieldname == 'dlc':
+            if self.rtr:
+                value = "({} bytes)".format(self.dlc)
+            else:
+                value = "({})".format(self.dlc)
+        if fieldname == 'ide':
+            value = "(1=Extended ID)" if self.ide else "(0=Standard ID)"
+        if fieldname == 'ida':
+            value = "(0x{:03x})".format(self.id_a)
+        if fieldname == 'idb':
+            value = "(0x{:05x}, full ID=0x{:08x})".format(self.id_b, self.id_a << 18 | self.id_b)
+        if fieldname == 'rtr':
+            value = "(1=Remote frame)" if self.rtr else "(0=Data frame)"
+
+        result = "{}{} {} {}".format(" " * start_finish.start, "^" * len(start_finish), description, value)
+        return result
 
     def _crc_bit(self, bit: str):
         """
@@ -153,7 +188,7 @@ class CANFrame:
             'dlc': "{:04b}".format(self.dlc),
             'data': "".join(["{:08b}".format(byte) for byte in self.data]),
             'crc_delimiter': '1',
-            'ack': '0',
+            'ack': '1' if self.ack == 1 else '0',
             'ack_delimiter': '1',
             'eof': '1111111',
             'ifs': '111'
@@ -200,12 +235,153 @@ class CANFrame:
         :param detailed: if set to True then the fields are described
         :return:
         """
-        print(self.stuffed_bitstream)
+        print(self.print_str(detailed=detailed))
+
+    def print_str(self, detailed=False) -> str:
+        result = self.stuffed_bitstream + '\n'
         if detailed:
             for fieldname in self.fieldnames:
-                self.print_field(fieldname=fieldname)
+                result += self.print_field_str(fieldname=fieldname) + '\n'
+        return result
+
+    def bitseq(self) -> str:
+        return "".join(['1' if bit else '0' for bit in self.frame_bits])
+
+    def __repr__(self):
+        return self.print_str(detailed=True)
+
+    @staticmethod
+    def from_bitseq(bitseq: str) -> Dict:
+        """
+        Decode a sequence of bits and return a CANFrame object
+        :param bitseq: string containing a sequence of '0' and '1'
+        :return: a dictionary of fields that have been decoded, and a CANFrame from the bit sequence
+        """
+        frame = {
+            'ida': '',
+            'srr': '',
+            'ide': '',
+            'idb': '',
+            'rtr': '',
+            'r1': '',
+            'r0': '',
+            'dlc': '',
+            'data': '',
+            'crc': '',
+            'crc_delimiter': '',
+            'ack': '',
+            'ack_delimiter': '',
+            'eof': '',
+            'ifs': ''
+        }
+        decoded = False
+        stuffing = False
+        byte_count = 0
+        field = 'sof'
+        last_6 = ''
+        for bit_num in range(len(bitseq)):
+            bit = bitseq[bit_num]
+            last_6 = last_6[-5:] + bit
+            if stuffing:
+                if last_6 == '111111' or last_6 == '000000':
+                    frame['stuff_error'] = bit_num
+                    break
+                elif last_6 == '111110' or last_6 == '000001':
+                    continue
+            if len(frame['crc']) == 15:
+                stuffing = False
+            # Look for SOF bit
+            if field == 'sof' and bit == '0':
+                stuffing = True
+                field = 'ida'
+            elif field == 'ida':
+                frame[field] += bit
+                if len(frame[field]) == 11:
+                    field = 'srr'
+            elif field == 'srr':
+                frame[field] = bit
+                field = 'ide'
+            elif field == 'ide':
+                frame[field] = bit
+                if bit == '1':
+                    field = 'idb'
+                else:
+                    field = 'r0'
+                    frame['rtr'] = frame['srr']
+            elif field == 'idb':
+                frame[field] += bit
+                if len(frame[field]) == 18:
+                    field = 'rtr'
+            elif field == 'rtr':
+                frame[field] = bit
+                field = 'r1'
+            elif field == 'r1':
+                frame[field] = bit
+                field = 'r0'
+            elif field == 'r0':
+                frame[field] = bit
+                field = 'dlc'
+            elif field == 'dlc':
+                frame[field] += bit
+                if len(frame[field]) == 4:
+                    byte_count = int(frame[field], base=2)
+                    if frame['rtr'] == '1' or byte_count == 0:
+                        field = 'crc'
+                    else:
+                        if byte_count > 8:
+                            byte_count = 8
+                        field = 'data'
+            elif field == 'data':
+                frame[field] += bit
+                if len(frame[field]) == byte_count * 8:
+                    field = 'crc'
+            elif field == 'crc':
+                frame[field] += bit
+                if len(frame[field]) == 15:
+                    field = 'crc_delimiter'
+            elif field == 'crc_delimiter':
+                frame[field] = bit
+                field = 'ack'
+            elif field == 'ack':
+                frame[field] = bit
+                field = 'ack_delimiter'
+            elif field == 'ack_delimiter':
+                frame[field] = bit
+                field = 'eof'
+            elif field == 'eof':
+                frame[field] += bit
+                if len(frame[field]) == 7:
+                    field = 'ifs'
+            elif field == 'ifs':
+                if frame[field] == '11':
+                    if bit == '1':
+                        frame[field] += bit
+                    decoded = True
+                    break
+                else:
+                    frame[field] += bit
+
+        if decoded:
+            id_a = int(frame['ida'], base=2)
+            ide = True if frame['ide'] == '1' else False
+            rtr = True if frame['rtr'] == '1' else False
+            dlc = int(frame['dlc'], base=2)
+            id_b = 0 if not ide else int(frame['idb'], base=2)
+            num_bytes = 0 if rtr or dlc == 0 else min(dlc, 8)
+
+            data = []
+            if not rtr:
+                data_str = frame['data']
+                for i in range(num_bytes):
+                    data.append(int(data_str[:8], base=2))
+                    data_str = data_str[8:]
+            frame['can_frame'] = CANFrame(id_a=id_a, ide=ide, rtr=rtr, id_b=id_b, dlc=dlc, data=bytes(data))
+        return frame
 
 
 if __name__ == '__main__':
-    f = CANFrame(can_id=0x14, data=bytes([0x01]))
+    f = CANFrame(id_a=0x14, data=bytes([0x01]))
     f.print(detailed=True)
+
+    frame = CANFrame.from_bitseq(f.bitseq())
+    frame['can_frame'].print(detailed=True)
