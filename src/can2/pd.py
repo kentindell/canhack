@@ -16,9 +16,114 @@
 ## You should have received a copy of the GNU General Public License
 ## along with this program; if not, see <http://www.gnu.org/licenses/>.
 ##
-
+import struct
 from collections import OrderedDict, namedtuple
 import sigrokdecode as srd
+
+
+class CANPCAPNG:
+    """
+    Generates a binary capture file in pcapng format. This is documented:
+
+    https://tools.ietf.org/id/draft-tuexen-opsawg-pcapng-01.html
+
+    The file produces:
+
+    - SHB (Section header block)
+    - IDB (Interface description block)
+    - Multiple EPBs (Extended packet blocks)
+
+    The SHB defines the file size and endianness.
+
+    The IDB defines the link type, which will be passed through into protocol decoders.
+        - The option if_tsresol should be set to select nanosecond timestamp resolution (since 1st Jan 1970)
+
+    The EPBs define the CAN frames. The timestamp is 64-bit. The interface ID matches the one in the IBD.
+
+    The link type is 227 (see http://www.tcpdump.org/linktypes.html), and the packet format is:
+
+        +---------------------------+
+        |      CAN ID and flags     |
+        |         (4 Octets)        |
+        +---------------------------+
+        |    Frame payload length   |
+        |         (1 Octet)         |
+        +---------------------------+
+        |          Padding          |
+        |         (1 Octet)         |
+        +---------------------------+
+        |      Reserved/Padding     |
+        |         (1 Octet)         |
+        +---------------------------+
+        |      Reserved/Padding     |
+        |         (1 Octet)         |
+        +---------------------------+
+        |           Payload         |
+        .                           .
+        .                           .
+        .                           .
+
+        Description
+
+        The field containing the CAN ID and flags is in network byte order (big-endian). The bottom 29 bits contain the CAN ID of the frame. The remaining bits are:
+
+            0x20000000 - set if the frame is an error message rather than a data frame.
+            0x40000000 - set if the frame is a remote transmission request frame.
+            0x80000000 - set if the frame is an extended 29-bit frame rather than a standard 11-bit frame. frame.
+
+        The SocketCAN dissector in wireshark might be able to handle a larger payload than 8 bytes.
+
+        # TODO create a new link layer definition with a LUA dissector that can handle more information
+    """
+
+    @staticmethod
+    def get_shb() -> bytes:
+        return b"".join(struct.pack('>I', i) for i in [0x0a0d0d0a, 28, 0x1a2b3c4d, 0x00010000, 0xffffffff, 0xffffffff, 28])
+
+    @staticmethod
+    def get_idb() -> bytes:
+        # Link type is SocketCAN, 227 (see http://www.tcpdump.org/linktypes.html)
+        # TODO set timestamps to be in nanoseconds, rather than microseconds, by adding the if_tsresol option
+        # TODO option type: 9
+        # TODO option length: 1
+        # TODO option value: 9 (+ 3 pad bytes)
+        # TODO this will add 8 bytes to the block length
+        return b"".join(struct.pack('>I', i) for i in [0x00000001, 20, 227 << 16, 0, 20])
+
+    @staticmethod
+    def get_epb(ida: int, idb: int, ide: int, rtr: int, data: bytes, timestamp: int, interface_id=0, error_frame=False) -> bytes:
+        assert ide in [1, 0]
+        assert rtr in [1, 0]
+        assert ida < (1 << 11)
+        assert idb < (1 << 18)
+        assert len(data) <= 8
+
+        if ide:
+            canid = ida << 18 | idb | 0x80000000
+        else:
+            canid = ida
+        if rtr:
+            canid |= 0x40000000
+        if error_frame:
+            canid = 0x20000000
+            data = bytes([8] * 8)  # Error reports need to be 8 bytes of data
+        padded_data = (data + bytes([0] * 8))[:8]
+
+        data_h = struct.unpack('>I', padded_data[:4])[0]
+        data_l = struct.unpack('>I', padded_data[4:])[0]
+
+        return b"".join(struct.pack('>I', i) for i in [0x00000006,
+                                                       48,
+                                                       interface_id,
+                                                       timestamp >> 32,
+                                                       timestamp & 0xffffffff,
+                                                       16,
+                                                       16,
+                                                       canid,
+                                                       len(data) << 24,
+                                                       data_h,
+                                                       data_l,
+                                                       48])
 
 
 class SerialCRC:
@@ -129,6 +234,7 @@ class CANField:
     last_6_str = ''
     data_bytes = []  # type: List['CANField']
     info = []  # type: List[Info]
+    rx_ok = False
 
     def __init__(self, name: str, add_to_data=False):
         self.name = name
@@ -432,9 +538,9 @@ class CANField:
             CANField('eof')
             return field
         elif field.name == 'eof':
-            # TODO create a list of CAN frames that have been received OK
             if field.get_len() == 6:
                 cls.info.append(cls.Info('can-info', canbit, ['Received OK', 'RX OK', 'RX', '']))
+                cls.rx_ok = True
             if field.get_len() == 7:
                 cls.info.append(cls.Info('can-info', canbit, ['Transmitted OK', 'TX OK', 'TX', '']))
                 CANField('ifs')
@@ -510,7 +616,9 @@ class Decoder(srd.Decoder):
         {'id': 'can-bitrate', 'desc': 'CAN bit rate (Hz)', 'default': 500000},
         {'id': 'can-samplepoint', 'desc': 'Sample point (%)', 'default': 75},
     )
-
+    binary = (
+        ('pcapng', 'The pcapng packet capture format used by Wireshark'),
+    )
     _ = (
         Annotation('data', 'Payload'),
         Annotation('sof', 'Start of frame'),
@@ -575,6 +683,8 @@ class Decoder(srd.Decoder):
         # This is the logic analyzer / oscilloscope sample rate
         self.sample_rate = None  # type: int
         self.sample_period_ns = None  # type: float
+        self.out_ann = None
+        self.out_binary = None
 
     def metadata(self, key, value):
         if key == srd.SRD_CONF_SAMPLERATE:
@@ -597,8 +707,8 @@ class Decoder(srd.Decoder):
                          self.can_bit_time_ns * (1.0 - self.can_sample_point)))
 
     def start(self):
-        self.reset()
         self.out_ann = self.register(srd.OUTPUT_ANN)
+        self.out_binary = self.register(srd.OUTPUT_BINARY)
 
     def decode_events(self, canbit: CANBit, falling_edge: bool, rising_edge: bool, canrx: str) -> CANBit:
         end_of_canbit = CANBit.bitstream(samplenum=self.samplenum,
@@ -611,6 +721,13 @@ class Decoder(srd.Decoder):
             field = CANField.state_machine(canbit=canbit)
             # At this point the CAN bit will have been identified as a stuff bit or not
             self.put_can_bit(canbit=canbit)
+
+            # If a CAN frame has been received OK then can output it to the pcapng binary out
+            if CANField.rx_ok:
+                self.put_pcapng_epb(canbit=canbit)
+                CANField.rx_ok = False
+            if field is not None and field.name == 'superposition':
+                self.put_pcapng_epb(canbit=canbit, error_frame=True)
 
             # Work out what to display. If the current field is ID A, then the previous field is SOF
             # and the
@@ -715,3 +832,28 @@ class Decoder(srd.Decoder):
     def put_can_info(self, canbit: CANBit, descriptions, annotation):
         data = [Annotation.lookup(annotation), descriptions]
         self.put(canbit.start_samplenum, canbit.end_samplenum, self.out_ann, data)
+
+    def put_pcapng_init(self):
+        self.put(0, 0, self.out_binary, [0, CANPCAPNG.get_shb()])
+        self.put(0, 0, self.out_binary, [0, CANPCAPNG.get_idb()])
+
+    def put_pcapng_epb(self, canbit: CANBit, error_frame=False):
+        ida = CANField.fields['ida'].get_value()
+        ide = CANField.fields['ide'].get_value()
+        idb = CANField.fields['idb'].get_value() if ide else 0
+        rtr = CANField.fields['rtr'].get_value() if ide else CANField.fields['srr'].get_value()
+        dlc = CANField.fields['dlc'].get_value()
+
+        if rtr or dlc == 0:
+            length = 0
+        elif dlc > 8:
+            length = 8
+        else:
+            length = dlc
+        data = bytes([CANField.data_bytes[i].get_value() for i in range(length)])
+
+        timestamp_ns = self.num_samples_to_time_ns(canbit.end_samplenum)
+        timestamp = int(timestamp_ns / 1000.0)
+
+        pcapng_epg = CANPCAPNG.get_epb(ida=ida, idb=idb, ide=ide, rtr=rtr, data=data, timestamp=timestamp, error_frame=error_frame)
+        self.put(0, 0, self.out_binary, [0, pcapng_epg])
