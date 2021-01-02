@@ -15,3 +15,6 @@ that goes into detail on how to use the toolkit, the CAN protocol hacks it
 includes, and demonstrates it attacking CAN frames in real hardware.
 
 There is also a blog post describing the [CANHack toolkit](https://kentindell.github.io/2020/01/20/canhack-toolkit/).
+
+A protocol decoder ``can2`` is included in ``src/can2``. This can show CAN events from a logic
+analyzer trace and output to Wireshark. There is a [blog post](https://kentindell.github.io/2021/01/02/can2-wireshark/b) describing this.
