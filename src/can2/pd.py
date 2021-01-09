@@ -763,8 +763,10 @@ class Decoder(srd.Decoder):
         """
         This is the main driver of the decoder: it is fed a set of logic analyzer samples
         """
-        print("sample period = {}ns".format(self.sample_period_ns))
-        print("bit time samples = {}".format(self.time_ns_to_num_samples(self.can_bit_time_ns)))
+        self.reset()
+
+        self.put_pcapng_init()
+
         canbit = CANBit(start_samplenum=self.samplenum)
 
         while True:
