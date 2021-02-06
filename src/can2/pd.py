@@ -423,7 +423,7 @@ class CANField:
 
         # SOF at end of frame case is handled above
         if field.name in ['crc-delimiter', 'ack-delimiter', 'eof', 'ifs', 'error-delimiter'] and canbit.value == '0':
-            if field.name == 'ifs' and field.get_len() > 1:
+            if field.name == 'ifs':
                 cls.info.append(cls.Info('can-warning', canbit, ['Overload', 'O', ''], ))
             elif field.name == 'eof' and field.get_len() == 7:
                 cls.info.append(cls.Info('can-warning', canbit, ['Double receive', 'Double', 'D', ''], ))
@@ -840,22 +840,26 @@ class Decoder(srd.Decoder):
         self.put(0, 0, self.out_binary, [0, CANPCAPNG.get_idb()])
 
     def put_pcapng_epb(self, canbit: CANBit, error_frame=False):
-        ida = CANField.fields['ida'].get_value()
-        ide = CANField.fields['ide'].get_value()
-        idb = CANField.fields['idb'].get_value() if ide else 0
-        rtr = CANField.fields['rtr'].get_value() if ide else CANField.fields['srr'].get_value()
-        dlc = CANField.fields['dlc'].get_value()
-
-        if rtr or dlc == 0:
-            length = 0
-        elif dlc > 8:
-            length = 8
-        else:
-            length = dlc
-        data = bytes([CANField.data_bytes[i].get_value() for i in range(length)])
-
         timestamp_ns = self.num_samples_to_time_ns(canbit.end_samplenum)
         timestamp = int(timestamp_ns / 1000.0)
 
-        pcapng_epg = CANPCAPNG.get_epb(ida=ida, idb=idb, ide=ide, rtr=rtr, data=data, timestamp=timestamp, error_frame=error_frame)
+        if error_frame:
+            pcapng_epg = CANPCAPNG.get_epb(ida=0, idb=0, ide=0, rtr=0, data=bytes(), timestamp=timestamp, error_frame=error_frame)
+        else:
+            ida = CANField.fields['ida'].get_value()
+            ide = CANField.fields['ide'].get_value()
+            idb = CANField.fields['idb'].get_value() if ide else 0
+            rtr = CANField.fields['rtr'].get_value() if ide else CANField.fields['srr'].get_value()
+            dlc = CANField.fields['dlc'].get_value()
+
+            if rtr or dlc == 0:
+                length = 0
+            elif dlc > 8:
+                length = 8
+            else:
+                length = dlc
+            data = bytes([CANField.data_bytes[i].get_value() for i in range(length)])
+
+            pcapng_epg = CANPCAPNG.get_epb(ida=ida, idb=idb, ide=ide, rtr=rtr, data=data, timestamp=timestamp, error_frame=error_frame)
+            
         self.put(0, 0, self.out_binary, [0, pcapng_epg])
