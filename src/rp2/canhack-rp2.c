@@ -1,20 +1,42 @@
 //
-// Created by ken on 11/12/2019.
+// Created by ken on 21/02/2021
 //
-// MicroPython bindings for the CAN hack module
+// MicroPython bindings for the CAN hack module on the Pi Pico
+//
+// TODO some of this code can be made common across all MicroPython ports and could be separated out for re-use
 
+#include <stdio.h>
 #include <canhack.h>
 #include <py/mperrno.h>
 #include <py/stream.h>
 #include <py/runtime.h>
 #include "py/mphal.h"
-#include "pin.h"
-#include "bufhelper.h"
 #include "py/objstr.h"
 #include "py/obj.h"
-#include "pyb_canhack.h"
-#include "canhack-PYBV11.h"
-#include <stdio.h>
+#include "rp2_canhack.h"
+#include "pico/stdlib.h"
+#include "hardware/pwm.h"
+
+// Placeholders for code that might not run on a second core and will be shared with other code
+// that generates interrupts
+static void inline disable_irq(void) {
+    __asm__ __volatile__ ("cpsid i");
+}
+
+static void inline enable_irq(void) {
+    __asm__ __volatile__ ("cpsie i");
+}
+
+static void inline buf_get_for_send(mp_obj_t o, mp_buffer_info_t *bufinfo, byte *tmp_data) {
+    if (mp_obj_is_int(o)) {
+        tmp_data[0] = mp_obj_get_int(o);
+        bufinfo->buf = tmp_data;
+        bufinfo->len = 1;
+        bufinfo->typecode = 'B';
+    } else {
+        mp_get_buffer_raise(o, bufinfo, MP_BUFFER_READ);
+    }
+}
 
 uint32_t copy_mp_bytes(mp_obj_t *mp_bytes, uint8_t *dest, uint32_t max_len)
 {
@@ -24,7 +46,7 @@ uint32_t copy_mp_bytes(mp_obj_t *mp_bytes, uint8_t *dest, uint32_t max_len)
 
     mp_buffer_info_t bufinfo;
     uint8_t data[1];
-    pyb_buf_get_for_send(mp_bytes, &bufinfo, data);
+    buf_get_for_send(mp_bytes, &bufinfo, data);
 
     if (bufinfo.len > max_len) {
         nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_ValueError, "Bytes parameter too long"));
@@ -36,95 +58,87 @@ uint32_t copy_mp_bytes(mp_obj_t *mp_bytes, uint8_t *dest, uint32_t max_len)
     return bufinfo.len;
 }
 
-typedef struct _pyb_canhack_obj_t {
+typedef struct _canhack_rp2_obj_t {
     mp_obj_base_t base;
-    uint32_t bit_time;
-    uint32_t sample_point_offset;
-} pyb_canhack_obj_t;
+    uint32_t bit_rate_kbps;
+} canhack_rp2_obj_t;
 
-#define     BAUD_500KBIT        (336U)
-#define     BAUD_250KBIT        (BAUD_500KBIT * 2U)
-#define     BAUD_125KBIT        (BAUD_250KBIT * 2U)
 
 // Construct a CAN hack object.
 //
 // The physical pins of the CAN bus is:
 //
-//  (RX, TX) = (Y3, Y4) = (PB8, PB9)
+//  RP2040 GP22 = CAN TX = Pico pin 29
+//  RP2040 GP21 = CAN RX = Pico pin 27
+//
+// These ports need to be initialized as outputs.
+//
+// The timer being used will be the 16-bit free-running counter of PWM 7 (see RP2040 Datasheet section 4.4),
+// a 16-bit counter value at CH7_CTR. The counter must be clocked at the full speed of the CPU.
+
 
 // init(bit_time, sample_point)
-STATIC mp_obj_t pyb_canhack_init_helper(pyb_canhack_obj_t *self, size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
+STATIC mp_obj_t rp2_canhack_init_helper(canhack_rp2_obj_t *self, size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
     enum { ARG_mode, ARG_extframe, ARG_prescaler, ARG_sjw, ARG_bs1, ARG_bs2, ARG_auto_restart };
     static const mp_arg_t allowed_args[] = {
-            { MP_QSTR_bit_time,     MP_ARG_KW_ONLY | MP_ARG_INT,   {.u_int  = BAUD_500KBIT} },
-            { MP_QSTR_sample_point, MP_ARG_KW_ONLY | MP_ARG_INT,   {.u_int  = 50U} },
+            { MP_QSTR_bit_rate,     MP_ARG_KW_ONLY | MP_ARG_INT,   {.u_int  = 500} },
     };
 
     // parse args
     mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
     mp_arg_parse_all(n_args, pos_args, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
 
-    uint32_t bit_time = args[0].u_int;
-    uint32_t sample_point = args[1].u_int;
+    uint32_t bit_rate = args[0].u_int;
 
-    if (bit_time < BAUD_500KBIT) {
-        nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_ValueError, "Not rated for baud rates higher than 500kbit/sec"));
-    }
-    if (sample_point > 75U) {
-        nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_ValueError, "Not rated for sample points higher than 75%"));
+    if (bit_rate != 500 && bit_rate != 250 && bit_rate != 125) {
     }
 
-    self->bit_time = bit_time;
-    self->sample_point_offset = (bit_time * sample_point) / 100U;
+    self->bit_rate_kbps = bit_rate;
+    init_gpio();
 
-    canhack_init(self->bit_time, self->sample_point_offset);
+    switch (bit_rate) {
+        case 500U:
+            init_ctr(BAUD_500KBIT_PRESCALE);
+            break;
+        case 250U:
+            init_ctr(BAUD_250KBIT_PRESCALE);
+            break;
+        case 125U:
+            init_ctr(BAUD_125KBIT_PRESCALE);
+            break;
+        default:
+            nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_ValueError, "Valid baud rates are 500, 250, 125 kbit/sec"));
+            // NOTREACHED
+    }
+    canhack_init();
 
-    // init GPIO
-    GPIO_InitTypeDef GPIO_InitStructure;
-
-    GPIO_InitStructure.Pin = GPIO_PIN_8;                // CAN RX
-    GPIO_InitStructure.Speed = GPIO_SPEED_HIGH;
-    GPIO_InitStructure.Mode = GPIO_MODE_INPUT;
-    GPIO_InitStructure.Pull = GPIO_PULLUP;
-    HAL_GPIO_Init(GPIOB, &GPIO_InitStructure);
-
-    SET_CAN_TX(CAN_TX_REC());
-    GPIO_InitStructure.Pin = GPIO_PIN_9;                // CAN TX
-    GPIO_InitStructure.Speed = GPIO_SPEED_HIGH;
-    GPIO_InitStructure.Mode = GPIO_MODE_OUTPUT_PP;
-    GPIO_InitStructure.Pull = GPIO_NOPULL;
-    HAL_GPIO_Init(GPIOB, &GPIO_InitStructure);
-
-    // Set up the debug timer
-    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
-    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
-    DWT->CYCCNT = 0;
+    set_can_tx_rec();
 
     return mp_const_none;
 }
 
-STATIC mp_obj_t pyb_canhack_init(size_t n_args, const mp_obj_t *args, mp_map_t *kw_args) {
-    return pyb_canhack_init_helper(MP_OBJ_TO_PTR(args[0]), n_args - 1, args + 1, kw_args);
+STATIC mp_obj_t rp2_canhack_init(size_t n_args, const mp_obj_t *args, mp_map_t *kw_args) {
+    return rp2_canhack_init_helper(MP_OBJ_TO_PTR(args[0]), n_args - 1, args + 1, kw_args);
 }
-STATIC MP_DEFINE_CONST_FUN_OBJ_KW(pyb_canhack_init_obj, 1, pyb_canhack_init);
+STATIC MP_DEFINE_CONST_FUN_OBJ_KW(rp2_canhack_init_obj, 1, rp2_canhack_init);
 
 // CANHack(...)
-STATIC mp_obj_t pyb_canhack_make_new(const mp_obj_type_t *type, size_t n_args, size_t n_kw, const mp_obj_t *args) {
+STATIC mp_obj_t rp2_canhack_make_new(const mp_obj_type_t *type, size_t n_args, size_t n_kw, const mp_obj_t *args) {
     mp_arg_check_num(n_args, n_kw, 0, MP_OBJ_FUN_ARGS_MAX, true);
 
-    pyb_canhack_obj_t *self = m_new_obj(pyb_canhack_obj_t);
-    self->base.type = &pyb_canhack_type;
+    canhack_rp2_obj_t *self = m_new_obj(canhack_rp2_obj_t);
+    self->base.type = &rp2_canhack_type;
 
     // configure the object
     mp_map_t kw_args;
     mp_map_init_fixed_table(&kw_args, n_kw, args + n_args);
 
-    pyb_canhack_init_helper(self, n_args, args, &kw_args);
+    rp2_canhack_init_helper(self, n_args, args, &kw_args);
 
     return self;
 }
 
-STATIC mp_obj_t pyb_canhack_set_frame(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args)
+STATIC mp_obj_t rp2_canhack_set_frame(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args)
 {
     static const mp_arg_t allowed_args[] = {
             { MP_QSTR_can_id,    MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 0x7ff} },
@@ -196,7 +210,7 @@ STATIC mp_obj_t pyb_canhack_set_frame(mp_uint_t n_args, const mp_obj_t *pos_args
 
     return mp_const_none;
 }
-STATIC MP_DEFINE_CONST_FUN_OBJ_KW(pyb_canhack_set_frame_obj, 1, pyb_canhack_set_frame);
+STATIC MP_DEFINE_CONST_FUN_OBJ_KW(rp2_canhack_set_frame_obj, 1, rp2_canhack_set_frame);
 
 #define ANSI_COLOR_RED     "\x1b[31m"
 #define ANSI_COLOR_GREEN   "\x1b[32m"
@@ -218,7 +232,7 @@ STATIC mp_obj_t make_mp_bytes(const uint8_t *src, uint32_t len)
     return mp_obj_new_str_from_vstr(&mp_type_bytes, &vstr);
 }
 
-STATIC mp_obj_t pyb_canhack_get_frame(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args)
+STATIC mp_obj_t rp2_canhack_get_frame(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args)
 {
     static const mp_arg_t allowed_args[] = {
             { MP_QSTR_second,           MP_ARG_KW_ONLY  | MP_ARG_BOOL,  {.u_bool = false} },
@@ -244,7 +258,7 @@ STATIC mp_obj_t pyb_canhack_get_frame(mp_uint_t n_args, const mp_obj_t *pos_args
     }
 
     for(uint32_t i = 0; i < frame->tx_bits; i++) {
-        frame_bits[i] = IS_CAN_TX_REC(frame->tx_bitstream[i]) ? '1' : '0';
+        frame_bits[i] = frame->tx_bitstream[i] ? '1' : '0';
     }
     frame_bytes = make_mp_bytes(frame_bits, frame->tx_bits);
 
@@ -265,9 +279,9 @@ STATIC mp_obj_t pyb_canhack_get_frame(mp_uint_t n_args, const mp_obj_t *pos_args
 
     return tuple;
 }
-STATIC MP_DEFINE_CONST_FUN_OBJ_KW(pyb_canhack_get_frame_obj, 1, pyb_canhack_get_frame);
+STATIC MP_DEFINE_CONST_FUN_OBJ_KW(rp2_canhack_get_frame_obj, 1, rp2_canhack_get_frame);
 
-STATIC mp_obj_t pyb_canhack_print_frame(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args)
+STATIC mp_obj_t rp2_canhack_print_frame(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args)
 {
     static const mp_arg_t allowed_args[] = {
             { MP_QSTR_stuff_bits,           MP_ARG_KW_ONLY  | MP_ARG_BOOL,  {.u_bool = true} },
@@ -287,41 +301,41 @@ STATIC mp_obj_t pyb_canhack_print_frame(mp_uint_t n_args, const mp_obj_t *pos_ar
     }
 
     char *colour = ANSI_COLOR_YELLOW;
-    printf("%s", colour);
+    mp_printf(MP_PYTHON_PRINTER, "%s", colour);
     for (uint32_t i = 0; i < frame->tx_bits; i++) {
-        char *bit_str = IS_CAN_TX_REC(frame->tx_bitstream[i]) ? "1" : "0";
+        char *bit_str = frame->tx_bitstream[i] ? "1" : "0";
         if (frame->stuff_bit[i]) {
             if (stuff_bits) {
-                printf("%s%s%s", ANSI_COLOR_RED, bit_str, colour);
+                mp_printf(MP_PYTHON_PRINTER, "%s%s%s", ANSI_COLOR_RED, bit_str, colour);
             }
         }
         else {
-            printf("%s", bit_str);
+            mp_printf(MP_PYTHON_PRINTER, "%s", bit_str);
         }
         if (i == frame->last_arbitration_bit) {
             colour = ANSI_COLOR_BLUE;
-            printf("%s", colour);
+            mp_printf(MP_PYTHON_PRINTER, "%s", colour);
         }
         if (i == frame->last_dlc_bit) {
             colour = ANSI_COLOR_GREEN;
-            printf("%s", colour);
+            mp_printf(MP_PYTHON_PRINTER, "%s", colour);
         }
         if (i == frame->last_data_bit) {
             colour = ANSI_COLOR_CYAN;
-            printf("%s", colour);
+            mp_printf(MP_PYTHON_PRINTER, "%s", colour);
         }
         if (i == frame->last_crc_bit) {
             colour = ANSI_COLOR_RESET;
-            printf("%s", colour);
+            mp_printf(MP_PYTHON_PRINTER, "%s", colour);
         }
     }
-    printf(ANSI_COLOR_RESET "\n");
+    mp_printf(MP_PYTHON_PRINTER, ANSI_COLOR_RESET "\n");
 
     return mp_const_none;
 }
-STATIC MP_DEFINE_CONST_FUN_OBJ_KW(pyb_canhack_print_frame_obj, 1, pyb_canhack_print_frame);
+STATIC MP_DEFINE_CONST_FUN_OBJ_KW(rp2_canhack_print_frame_obj, 1, rp2_canhack_print_frame);
 
-STATIC mp_obj_t pyb_canhack_send_frame(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args)
+STATIC mp_obj_t rp2_canhack_send_frame(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args)
 {
     static const mp_arg_t allowed_args[] = {
             { MP_QSTR_timeout,           MP_ARG_KW_ONLY  | MP_ARG_INT,  {.u_int = 65535U} },
@@ -342,20 +356,18 @@ STATIC mp_obj_t pyb_canhack_send_frame(mp_uint_t n_args, const mp_obj_t *pos_arg
     }
 
     // Disable interrupts around the library call because any interrupts will mess up the timing
-    __disable_irq();
-    RESET_CPU_CLOCK();
+    disable_irq();
+    reset_clock(0);
     // Transmit the frame with a timeout (default: 65K bit times, or about 130ms at 500kbit/sec)
     canhack_send_frame(timeout, retries);
-    __enable_irq();
+    enable_irq();
 
     return mp_const_none;
 }
-STATIC MP_DEFINE_CONST_FUN_OBJ_KW(pyb_canhack_send_frame_obj, 1, pyb_canhack_send_frame);
+STATIC MP_DEFINE_CONST_FUN_OBJ_KW(rp2_canhack_send_frame_obj, 1, rp2_canhack_send_frame);
 
-STATIC mp_obj_t pyb_canhack_send_janus_frame(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args)
+STATIC mp_obj_t rp2_canhack_send_janus_frame(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args)
 {
-    pyb_canhack_obj_t *self = pos_args[0];
-
     static const mp_arg_t allowed_args[] = {
             { MP_QSTR_sync_time,         MP_ARG_KW_ONLY  | MP_ARG_INT,  {.u_int = 0} },
             { MP_QSTR_split_time,        MP_ARG_KW_ONLY  | MP_ARG_INT,  {.u_int = 0} },
@@ -367,8 +379,8 @@ STATIC mp_obj_t pyb_canhack_send_janus_frame(mp_uint_t n_args, const mp_obj_t *p
     mp_arg_parse_all(n_args - 1, pos_args + 1, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
 
     // Default to fractions of a bit time: 0-6.5% = sync time, 6.5%-62.5% = first bit, 62.5%-100% = second bit.
-    uint32_t sync_time = args[0].u_int ? args[0].u_int : self->bit_time / 15U;
-    uint32_t split_time = args[1].u_int ? args[1].u_int : (self->bit_time * 5U) / 8U;
+    uint32_t sync_time = args[0].u_int ? args[0].u_int : BIT_TIME / 15U;
+    uint32_t split_time = args[1].u_int ? args[1].u_int : (BIT_TIME * 5U) / 8U;
     uint32_t timeout = args[2].u_int;
     uint32_t retries = args[3].u_int;
 
@@ -382,16 +394,16 @@ STATIC mp_obj_t pyb_canhack_send_janus_frame(mp_uint_t n_args, const mp_obj_t *p
     }
 
     // Disable interrupts around the library call because any interrupts will mess up the timing
-    __disable_irq();
+    disable_irq();
     // Transmit the frame with a timeout (default: 65K bit times, or about 130ms at 500kbit/sec)
     canhack_send_janus_frame(timeout, sync_time, split_time, retries);
-    __enable_irq();
+    enable_irq();
 
     return mp_const_none;
 }
-STATIC MP_DEFINE_CONST_FUN_OBJ_KW(pyb_canhack_send_janus_frame_obj, 1, pyb_canhack_send_janus_frame);
+STATIC MP_DEFINE_CONST_FUN_OBJ_KW(rp2_canhack_send_janus_frame_obj, 1, rp2_canhack_send_janus_frame);
 
-STATIC mp_obj_t pyb_canhack_spoof_frame(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args)
+STATIC mp_obj_t rp2_canhack_spoof_frame(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args)
 {
     static const mp_arg_t allowed_args[] = {
             { MP_QSTR_timeout,           MP_ARG_KW_ONLY  | MP_ARG_INT,  {.u_int = 2000000U} },
@@ -402,14 +414,13 @@ STATIC mp_obj_t pyb_canhack_spoof_frame(mp_uint_t n_args, const mp_obj_t *pos_ar
             { MP_QSTR_retries,           MP_ARG_KW_ONLY  | MP_ARG_INT,  {.u_int = false} },
     };
 
-    pyb_canhack_obj_t *self = pos_args[0];
     mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
     mp_arg_parse_all(n_args - 1, pos_args + 1, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
 
     uint32_t timeout = args[0].u_int;
     bool overwrite = args[1].u_bool;
-    uint32_t sync_time = args[2].u_int ? args[2].u_int : self->bit_time / 4U;
-    uint32_t split_time = args[3].u_int ? args[3].u_int : (self->bit_time * 5U) / 8U;
+    uint32_t sync_time = args[2].u_int ? args[2].u_int : BIT_TIME / 4U;
+    uint32_t split_time = args[3].u_int ? args[3].u_int : (BIT_TIME * 5U) / 8U;
     bool second = args[4].u_bool;
     bool retries = args[5].u_int;
 
@@ -429,53 +440,23 @@ STATIC mp_obj_t pyb_canhack_spoof_frame(mp_uint_t n_args, const mp_obj_t *pos_ar
 
     if (overwrite) {
         // Disable interrupts around the library call because any interrupts will mess up the timing
-        __disable_irq();
+        disable_irq();
         // Transmit the frame with a timeout. Target must be in error passive mode.
         canhack_spoof_frame_error_passive(timeout);
-        __enable_irq();
+        enable_irq();
     }
     else {
-        __disable_irq();
+        disable_irq();
         // Transmit a frame after detecting the target frame
         canhack_spoof_frame(timeout, second, sync_time, split_time, retries);
-        __enable_irq();
+        enable_irq();
     }
 
     return mp_const_none;
 }
-STATIC MP_DEFINE_CONST_FUN_OBJ_KW(pyb_canhack_spoof_frame_obj, 1, pyb_canhack_spoof_frame);
+STATIC MP_DEFINE_CONST_FUN_OBJ_KW(rp2_canhack_spoof_frame_obj, 1, rp2_canhack_spoof_frame);
 
-STATIC mp_obj_t pyb_canhack_error_attack(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args)
-{
-    static const mp_arg_t allowed_args[] = {
-            { MP_QSTR_repeat,           MP_ARG_KW_ONLY  | MP_ARG_INT,  {.u_int = 2U} },
-            { MP_QSTR_timeout,           MP_ARG_KW_ONLY  | MP_ARG_INT,  {.u_int = 2000000U} },
-    };
-
-    mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
-    mp_arg_parse_all(n_args - 1, pos_args + 1, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
-
-    uint32_t repeat = args[0].u_int;
-    uint32_t timeout = args[1].u_int;
-
-    canhack_frame_t *frame = canhack_get_frame(false);
-    if (!frame->frame_set) {
-        nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_ValueError, "CAN frame has not been set"));
-    }
-
-    // Target a frame
-    canhack_set_attack_masks();
-
-    __disable_irq();
-    // Looking for 0111111 (targeting a bit in the error delimiter) to generate an error.
-    bool timeout_occurred = canhack_error_attack(timeout, repeat, true, 0x7fU, 0x3fU);
-    __enable_irq();
-
-    return timeout_occurred ? mp_const_true : mp_const_false;
-}
-STATIC MP_DEFINE_CONST_FUN_OBJ_KW(pyb_canhack_error_attack_obj, 1, pyb_canhack_error_attack);
-
-STATIC mp_obj_t pyb_canhack_double_receive_attack(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args)
+STATIC mp_obj_t rp2_canhack_error_attack(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args)
 {
     static const mp_arg_t allowed_args[] = {
             { MP_QSTR_repeat,           MP_ARG_KW_ONLY  | MP_ARG_INT,  {.u_int = 2U} },
@@ -496,18 +477,48 @@ STATIC mp_obj_t pyb_canhack_double_receive_attack(mp_uint_t n_args, const mp_obj
     // Target a frame
     canhack_set_attack_masks();
 
-    __disable_irq();
+    disable_irq();
+    // Looking for 0111111 (targeting a bit in the error delimiter) to generate an error.
+    bool timeout_occurred = canhack_error_attack(timeout, repeat, true, 0x7fU, 0x3fU);
+    enable_irq();
+
+    return timeout_occurred ? mp_const_true : mp_const_false;
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_KW(rp2_canhack_error_attack_obj, 1, rp2_canhack_error_attack);
+
+STATIC mp_obj_t rp2_canhack_double_receive_attack(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args)
+{
+    static const mp_arg_t allowed_args[] = {
+            { MP_QSTR_repeat,           MP_ARG_KW_ONLY  | MP_ARG_INT,  {.u_int = 2U} },
+            { MP_QSTR_timeout,          MP_ARG_KW_ONLY  | MP_ARG_INT,  {.u_int = 2000000U} },
+    };
+
+    mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
+    mp_arg_parse_all(n_args - 1, pos_args + 1, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
+
+    uint32_t repeat = args[0].u_int;
+    uint32_t timeout = args[1].u_int;
+
+    canhack_frame_t *frame = canhack_get_frame(false);
+    if (!frame->frame_set) {
+        nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_ValueError, "CAN frame has not been set"));
+    }
+
+    // Target a frame
+    canhack_set_attack_masks();
+
+    disable_irq();
     do {
         // Looking for 01111111 (targeting last bit of EOF) to generate an error.
         canhack_error_attack(timeout, 1U, false, 0xffU, 0x7fU);
     } while (repeat--);
-    __enable_irq();
+    enable_irq();
 
     return mp_const_none;
 }
-STATIC MP_DEFINE_CONST_FUN_OBJ_KW(pyb_canhack_double_receive_attack_obj, 1, pyb_canhack_double_receive_attack);
+STATIC MP_DEFINE_CONST_FUN_OBJ_KW(rp2_canhack_double_receive_attack_obj, 1, rp2_canhack_double_receive_attack);
 
-STATIC mp_obj_t pyb_canhack_freeze_doom_loop_attack(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args)
+STATIC mp_obj_t rp2_canhack_freeze_doom_loop_attack(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args)
 {
     static const mp_arg_t allowed_args[] = {
             { MP_QSTR_repeat,           MP_ARG_KW_ONLY  | MP_ARG_INT,  {.u_int = 2U} },
@@ -528,16 +539,16 @@ STATIC mp_obj_t pyb_canhack_freeze_doom_loop_attack(mp_uint_t n_args, const mp_o
     // Target a frame
     canhack_set_attack_masks();
 
-    __disable_irq();
+    disable_irq();
     // Looking for 011111111 (targeting first bit of IFS) to generate an overload.
     canhack_error_attack(timeout, repeat, false, 0x1ffU, 0x0ffU);
-    __enable_irq();
+    enable_irq();
 
     return mp_const_none;
 }
-STATIC MP_DEFINE_CONST_FUN_OBJ_KW(pyb_canhack_freeze_doom_loop_attack_obj, 1, pyb_canhack_freeze_doom_loop_attack);
+STATIC MP_DEFINE_CONST_FUN_OBJ_KW(rp2_canhack_freeze_doom_loop_attack_obj, 1, rp2_canhack_freeze_doom_loop_attack);
 
-STATIC mp_obj_t pyb_canhack_set_can_tx(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args)
+STATIC mp_obj_t rp2_canhack_set_can_tx(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args)
 {
     static const mp_arg_t allowed_args[] = {
             { MP_QSTR_recessive,           MP_ARG_KW_ONLY  | MP_ARG_BOOL,  {.u_int = true} },
@@ -547,67 +558,151 @@ STATIC mp_obj_t pyb_canhack_set_can_tx(mp_uint_t n_args, const mp_obj_t *pos_arg
     mp_arg_parse_all(n_args - 1, pos_args + 1, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
 
     if(args[0].u_bool) {
-        SET_CAN_TX(CAN_TX_REC());
+        set_can_tx_rec();
     }
     else {
-        SET_CAN_TX(CAN_TX_DOM());
+        set_can_tx_dom();
     };
 
-    if (GET_CAN_RX_BIT()) {
+    if (get_can_rx()) {
         return mp_const_true;
     }
     else {
         return mp_const_false;
     }
 }
-STATIC MP_DEFINE_CONST_FUN_OBJ_KW(pyb_canhack_set_can_tx_obj, 1, pyb_canhack_set_can_tx);
+STATIC MP_DEFINE_CONST_FUN_OBJ_KW(rp2_canhack_set_can_tx_obj, 1, rp2_canhack_set_can_tx);
 
 
-STATIC const mp_map_elem_t pyb_canhack_locals_dict_table[] = {
-        // instance methods
-        { MP_OBJ_NEW_QSTR(MP_QSTR_init), (mp_obj_t)&pyb_canhack_init_obj },
-        { MP_OBJ_NEW_QSTR(MP_QSTR_set_frame), (mp_obj_t)&pyb_canhack_set_frame_obj },
-        { MP_OBJ_NEW_QSTR(MP_QSTR_get_frame), (mp_obj_t)&pyb_canhack_get_frame_obj },
-        { MP_OBJ_NEW_QSTR(MP_QSTR_print_frame), (mp_obj_t)&pyb_canhack_print_frame_obj },
-        { MP_OBJ_NEW_QSTR(MP_QSTR_send_frame), (mp_obj_t)&pyb_canhack_send_frame_obj },
-        { MP_OBJ_NEW_QSTR(MP_QSTR_send_janus_frame), (mp_obj_t)&pyb_canhack_send_janus_frame_obj },
-        { MP_OBJ_NEW_QSTR(MP_QSTR_spoof_frame), (mp_obj_t)&pyb_canhack_spoof_frame_obj },
-        { MP_OBJ_NEW_QSTR(MP_QSTR_error_attack), (mp_obj_t)&pyb_canhack_error_attack_obj },
-        { MP_OBJ_NEW_QSTR(MP_QSTR_double_receive_attack), (mp_obj_t)&pyb_canhack_double_receive_attack_obj },
-        { MP_OBJ_NEW_QSTR(MP_QSTR_freeze_doom_loop_attack), (mp_obj_t)&pyb_canhack_freeze_doom_loop_attack_obj },
-        { MP_OBJ_NEW_QSTR(MP_QSTR_set_can_tx), (mp_obj_t)&pyb_canhack_set_can_tx_obj },
-        { MP_ROM_QSTR(MP_QSTR_KBIT_500), MP_ROM_INT(BAUD_500KBIT) },
-        { MP_ROM_QSTR(MP_QSTR_KBIT_250), MP_ROM_INT(BAUD_250KBIT) },
-        { MP_ROM_QSTR(MP_QSTR_KBIT_125), MP_ROM_INT(BAUD_125KBIT) },
-};
-STATIC MP_DEFINE_CONST_DICT(pyb_canhack_locals_dict, pyb_canhack_locals_dict_table);
-
-STATIC void pyb_canhack_print(const mp_print_t *print, mp_obj_t self_in, mp_print_kind_t kind)
+STATIC mp_obj_t rp2_canhack_square_wave(mp_obj_t self_in)
 {
-    pyb_canhack_obj_t *self = self_in;
+    canhack_send_square_wave();
+    return mp_const_none;
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_1(rp2_canhack_square_wave_obj, rp2_canhack_square_wave);
 
-    mp_printf(print, "CANHack(bit_time=%d, sample_point=%d)", self->bit_time, self->sample_point_offset);
+
+STATIC mp_obj_t rp2_canhack_loopback(mp_obj_t self_in)
+{
+    canhack_loopback();
+    return mp_const_none;
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_1(rp2_canhack_loopback_obj, rp2_canhack_loopback);
+
+
+STATIC mp_obj_t rp2_canhack_get_clock(mp_obj_t self_in)
+{
+    return mp_obj_new_int(get_clock());
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_1(rp2_canhack_get_clock_obj, rp2_canhack_get_clock);
+
+
+STATIC mp_obj_t rp2_canhack_reset_clock(mp_obj_t self_in)
+{
+    ctr_t c = get_clock();
+    reset_clock(0);
+
+    return mp_obj_new_int(c);
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_1(rp2_canhack_reset_clock_obj, rp2_canhack_reset_clock);
+
+ctr_t ts[160];
+
+__attribute__((noinline, long_call, section(".time_critical"))) void send_raw_frame(canhack_frame_t *frame )
+{
+    uint8_t tx_index = 1U;
+    uint8_t ts_index = 3U;
+    ctr_t bit_end;
+    uint8_t tx = frame->tx_bitstream[tx_index++];
+
+    // SOF is first bit
+    ts[0] = get_clock();
+    reset_clock(0);
+    ts[1] = get_clock();
+    set_can_tx_dom();
+    ts[2] = get_clock();
+    bit_end = BIT_TIME;
+    for (;;) {
+        if (get_clock() >= bit_end) {
+            set_can_tx(tx);
+            ts[ts_index++] = get_clock();
+            tx = frame->tx_bitstream[tx_index++];
+            if ((tx_index >= frame->tx_bits)) {
+                set_can_tx_rec();
+                break;
+            }
+            bit_end += BIT_TIME;
+        }
+    }
+}
+
+STATIC mp_obj_t rp2_canhack_send_raw(mp_obj_t self_in)
+{
+    canhack_frame_t *frame = canhack_get_frame(false);
+    if (!frame->frame_set) {
+        nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_ValueError, "CAN frame has not been set"));
+    }
+
+    disable_irq();
+    ///////////////////
+    send_raw_frame(frame);
+    ///////////////////
+    enable_irq();
+
+    for(uint i = 0; i < frame->tx_bits; i++) {
+        mp_printf(MP_PYTHON_PRINTER, "%d=%d (%d)\n", i, ts[i], ts[i] - BIT_TIME * (i - 2));
+    }
+
+    return mp_const_none;
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_1(rp2_canhack_send_raw_obj, rp2_canhack_send_raw);
+
+
+STATIC const mp_map_elem_t rp2_canhack_locals_dict_table[] = {
+        // instance methods
+        { MP_OBJ_NEW_QSTR(MP_QSTR_init), (mp_obj_t)&rp2_canhack_init_obj },
+        { MP_OBJ_NEW_QSTR(MP_QSTR_set_frame), (mp_obj_t)&rp2_canhack_set_frame_obj },
+        { MP_OBJ_NEW_QSTR(MP_QSTR_get_frame), (mp_obj_t)&rp2_canhack_get_frame_obj },
+        { MP_OBJ_NEW_QSTR(MP_QSTR_print_frame), (mp_obj_t)&rp2_canhack_print_frame_obj },
+        { MP_OBJ_NEW_QSTR(MP_QSTR_send_frame), (mp_obj_t)&rp2_canhack_send_frame_obj },
+        { MP_OBJ_NEW_QSTR(MP_QSTR_send_janus_frame), (mp_obj_t)&rp2_canhack_send_janus_frame_obj },
+        { MP_OBJ_NEW_QSTR(MP_QSTR_spoof_frame), (mp_obj_t)&rp2_canhack_spoof_frame_obj },
+        { MP_OBJ_NEW_QSTR(MP_QSTR_error_attack), (mp_obj_t)&rp2_canhack_error_attack_obj },
+        { MP_OBJ_NEW_QSTR(MP_QSTR_double_receive_attack), (mp_obj_t)&rp2_canhack_double_receive_attack_obj },
+        { MP_OBJ_NEW_QSTR(MP_QSTR_freeze_doom_loop_attack), (mp_obj_t)&rp2_canhack_freeze_doom_loop_attack_obj },
+        { MP_OBJ_NEW_QSTR(MP_QSTR_set_can_tx), (mp_obj_t)&rp2_canhack_set_can_tx_obj },
+        { MP_OBJ_NEW_QSTR(MP_QSTR_square_wave), (mp_obj_t)&rp2_canhack_square_wave_obj },
+        { MP_OBJ_NEW_QSTR(MP_QSTR_loopback), (mp_obj_t)&rp2_canhack_loopback_obj },
+        { MP_OBJ_NEW_QSTR(MP_QSTR_get_clock), (mp_obj_t)&rp2_canhack_get_clock_obj },
+        { MP_OBJ_NEW_QSTR(MP_QSTR_reset_clock), (mp_obj_t)&rp2_canhack_reset_clock_obj },
+        { MP_OBJ_NEW_QSTR(MP_QSTR_send_raw), (mp_obj_t)&rp2_canhack_send_raw_obj },
+};
+STATIC MP_DEFINE_CONST_DICT(rp2_canhack_locals_dict, rp2_canhack_locals_dict_table);
+
+STATIC void rp2_canhack_print(const mp_print_t *print, mp_obj_t self_in, mp_print_kind_t kind)
+{
+    canhack_rp2_obj_t *self = self_in;
+
+    mp_printf(print, "CANHack(bit_rate=%d)", self->bit_rate_kbps);
 }
 
 mp_uint_t canhack_ioctl(mp_obj_t self_in, mp_uint_t request, uintptr_t arg, int *errcode) {
-    // pyb_canhack_obj_t *self = MP_OBJ_TO_PTR(self_in);
+    // rp2_canhack_obj_t *self = MP_OBJ_TO_PTR(self_in);
 
     *errcode = MP_EINVAL;
     return -1;
 }
 
 STATIC const mp_stream_p_t canhack_stream_p = {
-        //.read = canhack_read, // is read sensible for CAN?
-        //.write = canhack_write, // is write sensible for CAN?
         .ioctl = canhack_ioctl,
         .is_text = false,
 };
 
-const mp_obj_type_t pyb_canhack_type = {
+const mp_obj_type_t rp2_canhack_type = {
         { &mp_type_type },
         .name = MP_QSTR_CANHack,
-        .print = pyb_canhack_print,
-        .make_new = pyb_canhack_make_new,
+        .print = rp2_canhack_print,
+        .make_new = rp2_canhack_make_new,
         .protocol = &canhack_stream_p,
-        .locals_dict = (mp_obj_t)&pyb_canhack_locals_dict,
+        .locals_dict = (mp_obj_t)&rp2_canhack_locals_dict,
 };

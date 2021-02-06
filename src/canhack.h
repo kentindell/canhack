@@ -29,26 +29,10 @@
 // =======
 //
 // CANHACK_BOARD_H should be defined with the filename of the header file that contains the definitions. An
-// example header file is given for the v1.1 PyBoard that uses an STM32F405 microcontroller, called canhack-PYBV11.h.
+// example header file is given for the Raspberry Pi Pico that uses an RP2040 microcontroller, called canhack-rp2.h.
 //
-// CANHack uses an abstract machine-dependent format for a bit so that it can be mapped efficiently on to machine
-// operations. On the PyBoard this maps on to the masks uses by thee GPIO register BSRR (Bit Set Reset Register)
-// so that the code can run as fast as possible (which minimizes the jitter and keeps the signal as close as possible
-// to a legitimate CAN signal). The typedef canbit_t is used in the code to indicate this machine-dependent bit format.
-//
-// There are macros that must be defined so that canhack.c can deal with this machine-dependent bit format:
-//
-// IS_CAN_TX_REC(x)                             Is true iff x in the  canbit_t) is recessive
-// CAN_TX_BIT(x)                                Converts a bit from machine-dependent to 0 or 1
-// CAN_TX_DOM()                                 Returns a machine-dependent format dominant bit
-// CAN_TX_REC()                                 Returns a machine-dependent format recessive bit
-// SET_CAN_TX(x)                                Set the CAN TX port to the bit in machine-dependent format
-// GET_CAN_RX_BIT()                             Return 0 if the CAN RX pin is dominant, 1 if the CAN RX pin is recessive
-//
-// There are also macros that define elapsed time:
-//
-// GET_CPU_CLOCK()                              Return the elapsed time in CPU clock cycles
-// RESET_CPU_CLOCK()                            Resets the CPU clock counter to 0
+// There are inline functions that must be defined so that canhack.c can deal with the machine-dependent driving of
+// the I/O pins.
 //
 // The toolkit currently spins in software to detect the key events (start/end of bit, sample point, falling edge on
 // CAN TX). Some microcontrollers will have timer/counter hardware that can support this more directly (such as
@@ -87,17 +71,22 @@
 //
 // The specifics of each API call are documented below.
 
-#ifndef MICROPYTHON_CANHACK_H
+#ifndef CANHACK_H
 #include <inttypes.h>
 #include <stdbool.h>
 
-#define CANHACK_MAX_BITS                        (160U)
+#ifndef CANHACK_BOARD_H
+#define CANHACK_BOARD_H     "rp2_canhack.h"
+#endif
 
-typedef uint32_t canbit_t;
+#include CANHACK_BOARD_H
+#include <stdio.h>
+
+#define CANHACK_MAX_BITS                        (160U)
 
 /// Structure that defines a CAN frame parameters
 typedef struct {
-    canbit_t tx_bitstream[CANHACK_MAX_BITS];    ///< The bitstream of the CAN frame
+    uint8_t tx_bitstream[CANHACK_MAX_BITS];     ///< The bitstream of the CAN frame
     bool stuff_bit[CANHACK_MAX_BITS];           ///< Indicates if the corresponding bit is a stuff bit
     uint8_t tx_bits;                            ///< Number of  bits in the frame
     uint32_t tx_arbitration_bits;               ///< Number of bits in arbitartion (including stuff bits); the fields are ID A + RTR (standard) or ID A + SRR + IDE + ID B + RTR (extended)
@@ -119,9 +108,7 @@ typedef struct {
 } canhack_frame_t;
 
 /// \brief Initialize CANHack toolkit
-/// \param bit_time CAN bit time in CPU cycles
-/// \param sample_point_offset offset within a CAN bit of sample point, in CPU cycles
-void canhack_init(uint32_t bit_time, uint32_t sample_point_offset);
+void canhack_init(void);
 
 /// \brief Set the parameters of the CAN frame
 /// \param id_a 11-bit CAN ID
@@ -141,6 +128,15 @@ canhack_frame_t *canhack_get_frame(bool second);
 /// \brief Set the attack masks from frame 1 (frame 1 must be set)
 void canhack_set_attack_masks(void);
 
+/// \brief Send a square wave on the CAN TX pin (used to check setup)
+void canhack_send_square_wave(void);
+
+/// \brief Send to the CAN TX pin what is seen on the CAN RX pin (used for testing)
+void canhack_loopback(void);
+
+/// \brief Send a CAN frame to the CAN bus without waiting for 11 idle bits or syncing with SOF
+void canhack_send_raw_frame(void);
+
 /// \brief Send a frame on the CAN bus (not an attack)
 /// \param timeout Number of bit times to wait until frame is sent
 /// \param retries Number of times the frame should be re-entered into arbitration (after losing or after an error)
@@ -153,7 +149,7 @@ bool canhack_send_frame(uint32_t timeout, uint32_t retries);
 /// \param split_time Time when phase 1 bit value is set to phase 2 bit value
 /// \param retries Number of times the frame should be re-entered into arbitration (after losing or after an error)
 /// \return
-bool canhack_send_janus_frame(uint32_t timeout, uint32_t sync_time, uint32_t split_time, uint32_t retries);
+bool canhack_send_janus_frame(uint32_t timeout, ctr_t sync_time, ctr_t split_time, uint32_t retries);
 
 /// \brief Send a spoofed frame just after the target frame ends
 /// \param timeout Number of bit times to wait until frame is sent
@@ -162,7 +158,7 @@ bool canhack_send_janus_frame(uint32_t timeout, uint32_t sync_time, uint32_t spl
 /// \param split_time Time when phase 1 bit value is set to phase 2 bit value (if a Janus frame)
 /// \param retries Number of times the frame should be re-entered into arbitration (after losing or after an error)
 /// \return True if frame was sent OK, false if timed out or too many retries
-bool canhack_spoof_frame(uint32_t timeout, bool janus, uint32_t sync_time, uint32_t split_time, uint32_t retries);
+bool canhack_spoof_frame(uint32_t timeout, bool janus, ctr_t sync_time, ctr_t split_time, uint32_t retries);
 
 /// \brief Overwrite the target frame (sender must be in error passive mode)
 /// \param timeout Number of bit times to wait until frame is sent
@@ -178,6 +174,6 @@ bool canhack_spoof_frame_error_passive(uint32_t timeout);
 /// \return True if the attack succeeded and false if the timeout occurred
 bool canhack_error_attack(uint32_t timeout, uint32_t repeat, bool inject_error, uint32_t eof_mask, uint32_t eof_match);
 
-#define MICROPYTHON_CANHACK_H
+#define CANHACK_H
 
-#endif //MICROPYTHON_CANHACK_H
+#endif //CANHACK_H
