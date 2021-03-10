@@ -9,8 +9,8 @@ This repository contains tools and resources for CAN hacking.
 
 The main documentation tree is [here](https://kentindell.github.io/canhack/).
 
-More details on CANHack on [Ken Tindell's](https://kentindell.github.io)
-web site [here](https://kentindell.github.io/canhack).
+More details about the CANHack toolkit are on [Ken Tindell's](https://kentindell.github.io)
+web site [here](https://kentindell.github.io/toolkit).
 
 There
 is a [CANHack toolkit demo video](https://youtu.be/dATyoWOlEJU) 
