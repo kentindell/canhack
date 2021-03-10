@@ -1,0 +1,334 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Canis CAN boards &#8212; Yes We CAN  documentation</title>
+    <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+    <link rel="stylesheet" href="_static/alabaster.css" type="text/css" />
+    <script id="documentation_options" data-url_root="./" src="_static/documentation_options.js"></script>
+    <script src="_static/jquery.js"></script>
+    <script src="_static/underscore.js"></script>
+    <script src="_static/doctools.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="MicroPython CAN API" href="cantop.html" />
+    <link rel="prev" title="Introduction" href="intro.html" />
+   
+  <link rel="stylesheet" href="_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <div class="section" id="canis-can-boards">
+<span id="hardware"></span><h1>Canis CAN boards<a class="headerlink" href="#canis-can-boards" title="Permalink to this headline">¶</a></h1>
+<div class="section" id="canhack-board">
+<span id="id1"></span><h2>CANHack board<a class="headerlink" href="#canhack-board" title="Permalink to this headline">¶</a></h2>
+<p>The Canis CANHack board interfaces to the CANHack toolkit software to demonstrate CAN protocol attacks. It
+interfaces to the Raspberry Pi Pico as a “sock” where the Pico is soldered on to the CANHack board.</p>
+<img alt="_images/canhack.jpeg" src="_images/canhack.jpeg" />
+<p>The board contains just a CAN transceiver with RX and TX wired directly to GPIO pins of the Pico. There is one
+further pin provided: TRIG. This for future expansion, intended to produce a trigger pulse to a logic analyzer
+when certain conditions are detected.</p>
+<p>The CANHack board contains a header to interface to a logic analyzer or mixed signal oscilloscope,
+ith the following connections:</p>
+<ul class="simple">
+<li><p>Digital 3.3V TRIG output to trigger the scope/analyzer</p></li>
+<li><p>Digital 3.3V CAN RX digital signal from the CAN transceiver</p></li>
+<li><p>Digital 3.3V CAN TX digital signal to the CAN tranceiver</p></li>
+<li><p>CAN H</p></li>
+<li><p>CAN L</p></li>
+</ul>
+<p>The connections on the Pico pins are as follows:</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 12%" />
+<col style="width: 21%" />
+<col style="width: 17%" />
+<col style="width: 11%" />
+<col style="width: 39%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Pico pin</p></th>
+<th class="head"><p>Pico Function</p></th>
+<th class="head"><p>PCB name</p></th>
+<th class="head"><p>Direction</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>29</p></td>
+<td><p>GP22</p></td>
+<td><p>CANTX</p></td>
+<td><p>Out</p></td>
+<td><p>TX on the CAN transceiver</p></td>
+</tr>
+<tr class="row-odd"><td><p>27</p></td>
+<td><p>GP21</p></td>
+<td><p>CANRX</p></td>
+<td><p>In</p></td>
+<td><p>RX on the CAN transceiver</p></td>
+</tr>
+<tr class="row-even"><td><p>4</p></td>
+<td><p>GP2</p></td>
+<td><p>TRIG</p></td>
+<td><p>Out</p></td>
+<td><p>Debugging / trigger pin</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="section" id="canpico-board">
+<span id="canpico"></span><h2>CANPico board<a class="headerlink" href="#canpico-board" title="Permalink to this headline">¶</a></h2>
+<p>The CANPico board contains an Microchip MCP2518 CAN controller (interfaced over SPI) and a
+Microchip MCP2562FD CAN transceiver.</p>
+<img alt="_images/canpico.jpg" src="_images/canpico.jpg" />
+<p>The MCP2518 CAN controller is connected to SPI 1 of the Pico and is clocked with a 40MHz crystal, allowing
+SPI clock rates up to about 18MHz. The board includes a header with the same pinout as the CANHack board:</p>
+<ul class="simple">
+<li><p>Digital 3.3V TRIG output to trigger the scope/analyzer</p></li>
+<li><p>Digital 3.3V CAN RX digital signal from the CAN transceiver</p></li>
+<li><p>Digital 3.3V CAN TX digital signal to the CAN tranceiver</p></li>
+<li><p>CAN H</p></li>
+<li><p>CAN L</p></li>
+</ul>
+<p>There are additional GPIO pins allocated to the CANPico board:</p>
+<ul class="simple">
+<li><p>The SOF pin has an edge applied when Start-of-Frame in the CAN protocol is detected by the controller</p></li>
+<li><p>The STBY pin is an output that driver the transceiver into standby mode (to reduce power consumption when inactive)</p></li>
+<li><p>An IRQ pin to trigger an interrupt service routine (ISR) on the Pico to handle CAN events in the controller</p></li>
+</ul>
+<p>The table below gives the pins used by the CANPico board:</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 12%" />
+<col style="width: 21%" />
+<col style="width: 17%" />
+<col style="width: 11%" />
+<col style="width: 39%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Pico pin</p></th>
+<th class="head"><p>Pico Function</p></th>
+<th class="head"><p>PCB name</p></th>
+<th class="head"><p>Direction</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>29</p></td>
+<td><p>GP22</p></td>
+<td><p>CANTX</p></td>
+<td><p>Out</p></td>
+<td><p>TX on the CAN transceiver</p></td>
+</tr>
+<tr class="row-odd"><td><p>27</p></td>
+<td><p>GP21</p></td>
+<td><p>CANRX</p></td>
+<td><p>In</p></td>
+<td><p>RX on the CAN transceiver</p></td>
+</tr>
+<tr class="row-even"><td><p>4</p></td>
+<td><p>GP2</p></td>
+<td><p>TRIG</p></td>
+<td><p>Out</p></td>
+<td><p>Trigger pin</p></td>
+</tr>
+<tr class="row-odd"><td><p>11</p></td>
+<td><p>SPI1_Rx</p></td>
+<td><p>MISO</p></td>
+<td><p>In</p></td>
+<td><p>SPI microcontroller in peripheral out</p></td>
+</tr>
+<tr class="row-even"><td><p>14</p></td>
+<td><p>SPI1_SCK</p></td>
+<td><p>SCK</p></td>
+<td><p>Out</p></td>
+<td><p>SPI clock</p></td>
+</tr>
+<tr class="row-odd"><td><p>15</p></td>
+<td><p>SPI1_Tx</p></td>
+<td><p>MOSI</p></td>
+<td><p>Out</p></td>
+<td><p>SPI microcontroller out peripheral in</p></td>
+</tr>
+<tr class="row-even"><td><p>9</p></td>
+<td><p>GP6</p></td>
+<td><p>CSn</p></td>
+<td><p>Out</p></td>
+<td><p>Peripheral chip select</p></td>
+</tr>
+<tr class="row-odd"><td><p>7</p></td>
+<td><p>GP5</p></td>
+<td><p>IRQ</p></td>
+<td><p>In</p></td>
+<td><p>Peripheral interrupt request</p></td>
+</tr>
+<tr class="row-even"><td><p>6</p></td>
+<td><p>GP4</p></td>
+<td><p>SOF</p></td>
+<td><p>In</p></td>
+<td><p>Peripheral Start-of-frame</p></td>
+</tr>
+<tr class="row-odd"><td><p>5</p></td>
+<td><p>GP3</p></td>
+<td><p>STBY</p></td>
+<td><p>Out</p></td>
+<td><p>Peripheral low-power standby mode</p></td>
+</tr>
+</tbody>
+</table>
+<div class="section" id="canpico-board-test-functions">
+<h3>CANPico board test functions<a class="headerlink" href="#canpico-board-test-functions" title="Permalink to this headline">¶</a></h3>
+<p>There is a method defined in MicroPython (included in the <a class="reference internal" href="classes/canid.html#CANID" title="CANID"><code class="xref py py-class docutils literal notranslate"><span class="pre">CANID</span></code></a> class) to help to test and debug
+the board.</p>
+<dl class="py method">
+<dt id="test_spi">
+<code class="sig-name descname"><span class="pre">test_spi</span></code><span class="sig-paren">(</span><em class="sig-param"><span class="pre">[,</span> <span class="pre">init=False]</span> <span class="pre">[,</span> <span class="pre">select=False]</span> <span class="pre">[,</span> <span class="pre">deselect=False]</span> <span class="pre">[,</span> <span class="pre">write_word=False]</span> <span class="pre">[,</span> <span class="pre">addr=0]</span> <span class="pre">[,</span> <span class="pre">value=0]</span> <span class="pre">[,</span> <span class="pre">read_word=False]</span> <span class="pre">[,</span> <span class="pre">read_words=False]</span> <span class="pre">[,</span> <span class="pre">write_words=False]</span></em><span class="sig-paren">)</span><a class="headerlink" href="#test_spi" title="Permalink to this definition">¶</a></dt>
+<dd><p>Tests the SPI interface to the MCP2518 CAN controller.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns</dt>
+<dd class="field-odd"><p><cite>None</cite> or int or a tuple of four ints</p>
+</dd>
+</dl>
+</dd></dl>
+
+<hr class="docutils" />
+<div class="section" id="examples">
+<h4>Examples<a class="headerlink" href="#examples" title="Permalink to this headline">¶</a></h4>
+<p>All the examples assume a <cite>CANID</cite> instance has been created with:</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">t</span> <span class="o">=</span> <span class="n">rp2</span><span class="o">.</span><span class="n">CANID</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>To initialize the SPI controller in the Pico:</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">t</span><span class="o">.</span><span class="n">test_spi</span><span class="p">(</span><span class="n">init_spi</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>This will set SPI1 in the RP2040 to run with a clock of about 15MHz (this only needs to be run once).</p>
+<p>To set the CSn pin to 0:</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">t</span><span class="o">.</span><span class="n">test_spi</span><span class="p">(</span><span class="n">select</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>To set the CSn pin to 1:</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">t</span><span class="o">.</span><span class="n">test_spi</span><span class="p">(</span><span class="n">deselect</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>To write a value to address 0x400 (the first word of the buffer RAM in the controller:</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">t</span><span class="o">.</span><span class="n">test_spi</span><span class="p">(</span><span class="n">select</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">addr</span><span class="o">=</span><span class="mh">0x400</span><span class="p">,</span> <span class="n">write_word</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">t</span><span class="o">.</span><span class="n">test_spi</span><span class="p">(</span><span class="n">deselect</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>To read and print in hex a value from address 0x400:</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">w</span> <span class="o">=</span> <span class="n">t</span><span class="o">.</span><span class="n">test_spi</span><span class="p">(</span><span class="n">select</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">addr</span><span class="o">=</span><span class="mh">0x400</span><span class="p">,</span> <span class="n">read_word</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">t</span><span class="o">.</span><span class="n">test_spi</span><span class="p">(</span><span class="n">deselect</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="s2">&quot;0x</span><span class="si">{:08x}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">w</span><span class="p">))</span>
+</pre></div>
+</div>
+<p>To read and print in hex four values starting from address 0x400:</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">words</span> <span class="o">=</span> <span class="n">t</span><span class="o">.</span><span class="n">test_spi</span><span class="p">(</span><span class="n">select</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">addr</span><span class="o">=</span><span class="mh">0x400</span><span class="p">,</span> <span class="n">read_words</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">t</span><span class="o">.</span><span class="n">test_spi</span><span class="p">(</span><span class="n">deselect</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="k">for</span> <span class="n">w</span> <span class="ow">in</span> <span class="n">words</span><span class="p">:</span>
+<span class="gp">... </span>    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;0x</span><span class="si">{:08x}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">w</span><span class="p">))</span>
+</pre></div>
+</div>
+<p>To write four specific words (<cite>0xdeadbeef</cite>, <cite>0xcafef00d</cite>, <cite>0x01e551ca</cite>, and <cite>0x01020304</cite>) to a starting address:</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">t</span><span class="o">.</span><span class="n">test_spi</span><span class="p">(</span><span class="n">select</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">addr</span><span class="o">=</span><span class="mh">0x400</span><span class="p">,</span> <span class="n">write_words</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">t</span><span class="o">.</span><span class="n">test_spi</span><span class="p">(</span><span class="n">deselect</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>These functions allow the basic SPI interface to be tested with a logic analyzer to see various pins are driven
+correctly and to see that values can be read correctly from the controller.</p>
+</div>
+</div>
+</div>
+</div>
+
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="index.html">Yes We CAN</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="intro.html">Introduction</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Canis CAN boards</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#canhack-board">CANHack board</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#canpico-board">CANPico board</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="cantop.html">MicroPython CAN API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="canhacktop.html">CANHack toolkit</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="index.html">Documentation overview</a><ul>
+      <li>Previous: <a href="intro.html" title="previous chapter">Introduction</a></li>
+      <li>Next: <a href="cantop.html" title="next chapter">MicroPython CAN API</a></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" />
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2021, Ken Tindell.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 3.5.1</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+      |
+      <a href="_sources/boardstop.rst.txt"
+          rel="nofollow">Page source</a>
+    </div>
+
+    
+
+    
+  </body>
+</html>

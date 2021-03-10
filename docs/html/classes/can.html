@@ -1,0 +1,380 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CAN — CAN controller &#8212; Yes We CAN  documentation</title>
+    <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+    <link rel="stylesheet" href="../_static/alabaster.css" type="text/css" />
+    <script id="documentation_options" data-url_root="../" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="CANFrame — CAN frame" href="canframe.html" />
+    <link rel="prev" title="MicroPython CAN API" href="../cantop.html" />
+   
+  <link rel="stylesheet" href="../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <div class="section" id="can-can-controller">
+<h1><code class="docutils literal notranslate"><span class="pre">CAN</span></code> — CAN controller<a class="headerlink" href="#can-can-controller" title="Permalink to this headline">¶</a></h1>
+<dl class="py class">
+<dt id="CAN">
+<em class="property"><span class="pre">class</span> </em><code class="sig-name descname"><span class="pre">CAN</span></code><span class="sig-paren">(</span><em class="sig-param"><span class="pre">[,</span> <span class="pre">profile=0]</span> <span class="pre">[,</span> <span class="pre">id_filters=None]</span> <span class="pre">[,</span> <span class="pre">hard_reset=False]</span> <span class="pre">[,</span> <span class="pre">start=True]</span></em><span class="sig-paren">)</span><a class="headerlink" href="#CAN" title="Permalink to this definition">¶</a></dt>
+<dd><p>Represents CAN controller hardware.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>profile</strong> (<em>int</em>) – The profile for the CAN bus bit rate (see <a class="reference internal" href="#profiles"><span class="std std-ref">Profiles</span></a>).</p></li>
+<li><p><strong>id_filters</strong> – A dictionary mapping integers to <a class="reference internal" href="canidfilter.html#CANIDFilter" title="CANIDFilter"><code class="xref py py-class docutils literal notranslate"><span class="pre">CANIDFilter</span></code></a> instances (see <a class="reference internal" href="../cantop.html#id-filtering"><span class="std std-ref">ID filtering</span></a>)</p></li>
+<li><p><strong>hard_reset</strong> (<em>bool</em>) – Set to True to reset the CAN controller at the lowest level (equivalent to power-on reset)</p></li>
+<li><p><strong>start</strong> (<em>bool</em>) – Set to False to prevent the CAN controller from joining the CAN bus</p></li>
+</ul>
+</dd>
+<dt class="field-even">Raises</dt>
+<dd class="field-even"><ul class="simple">
+<li><p><strong>TypeError</strong> – if the key/value pairs in <cite>id_filters</cite> are not int/instances of <a class="reference internal" href="canidfilter.html#CANIDFilter" title="CANIDFilter"><code class="xref py py-class docutils literal notranslate"><span class="pre">CANIDFilter</span></code></a></p></li>
+<li><p><strong>ValueError</strong> – if the <cite>profile</cite> value is out of range</p></li>
+<li><p><strong>RuntimeError</strong> – if the controller hardware is not connected via SPI</p></li>
+</ul>
+</dd>
+</dl>
+<p>A value of <cite>None</cite> for <cite>id_filters</cite> sets up the CAN controller to accept all incoming frames.</p>
+</dd></dl>
+
+<div class="section" id="methods">
+<h2>Methods<a class="headerlink" href="#methods" title="Permalink to this headline">¶</a></h2>
+<dl class="py method">
+<dt id="send_frame">
+<code class="sig-name descname"><span class="pre">send_frame</span></code><span class="sig-paren">(</span><em class="sig-param"><span class="pre">frame</span></em><span class="optional">[</span>, <em class="sig-param"><span class="pre">fifo=False</span></em><span class="optional">]</span><span class="sig-paren">)</span><a class="headerlink" href="#send_frame" title="Permalink to this definition">¶</a></dt>
+<dd><p>Queue a frame for transmission on the CAN bus</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>frame</strong> (<a class="reference internal" href="canframe.html#CANFrame" title="CANFrame"><em>CANFrame</em></a>) – The CAN frame to send</p></li>
+<li><p><strong>fifo</strong> (<em>bool</em>) – Whether the queue the frame in the FIFO queue (see <a class="reference internal" href="../cantop.html#fifo-transmission"><span class="std std-ref">FIFO transmission</span></a>)</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p><cite>True</cite> if the frame was queued successfully, <cite>False</cite> otherwise</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p>bool</p>
+</dd>
+<dt class="field-even">Raises</dt>
+<dd class="field-even"><p><strong>TypeError</strong> – if frame is not an instance of <a class="reference internal" href="canframe.html#CANFrame" title="CANFrame"><code class="xref py py-class docutils literal notranslate"><span class="pre">CANFrame</span></code></a>.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<hr class="docutils" />
+<dl class="py method">
+<dt id="send_frames">
+<code class="sig-name descname"><span class="pre">send_frames</span></code><span class="sig-paren">(</span><em class="sig-param"><span class="pre">frames</span> <span class="pre">[,</span> <span class="pre">fifo=False</span></em><span class="sig-paren">)</span><a class="headerlink" href="#send_frames" title="Permalink to this definition">¶</a></dt>
+<dd><p>Send a collection of CAN frames on the bus</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>frames</strong> (<a class="reference internal" href="canframe.html#CANFrame" title="CANFrame"><em>CANFrame</em></a>) – A list of CAN frames to send</p></li>
+<li><p><strong>fifo</strong> (<em>bool</em>) – Whether the queue the frames in the FIFO queue (see <a class="reference internal" href="../cantop.html#fifo-transmission"><span class="std std-ref">FIFO transmission</span></a>)</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p><cite>None</cite></p>
+</dd>
+<dt class="field-odd">Raises</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>TypeError</strong> – if <cite>frames</cite> is not a tuple of <a class="reference internal" href="canframe.html#CANFrame" title="CANFrame"><code class="xref py py-class docutils literal notranslate"><span class="pre">CANFrame</span></code></a> instances</p></li>
+<li><p><strong>ValueError</strong> – if there is insufficient room in the queues</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<hr class="docutils" />
+<dl class="py method">
+<dt id="recv">
+<code class="sig-name descname"><span class="pre">recv</span></code><span class="sig-paren">(</span><span class="optional">[</span><em class="sig-param"><span class="pre">limit=128</span></em><span class="optional">]</span><span class="sig-paren">)</span><a class="headerlink" href="#recv" title="Permalink to this definition">¶</a></dt>
+<dd><p>Receive CAN frames</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><p><strong>limit</strong> (<em>int</em>) – The maximum number of frames to remove from the FIFO (defaults to the entire FIFO)</p>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p>a tuple of <a class="reference internal" href="canframe.html#CANFrame" title="CANFrame"><code class="xref py py-class docutils literal notranslate"><span class="pre">CANFrame</span></code></a> instances for the CAN frames received since the last call to <cite>recv</cite></p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p>tuple</p>
+</dd>
+</dl>
+<p>The tuple is ordered by the order of CAN frame reception into the receive FIFO and the frames are removed from
+the FIFO. If no frames have been received then an empty tuple is returned. An element in the tuple is <cite>None</cite>
+if there are one or more missing frames because the FIFO was full at that point.</p>
+<p>This function can be polled regularly to return the frames received.</p>
+</dd></dl>
+
+<hr class="docutils" />
+<dl class="py method">
+<dt id="recv_pending">
+<code class="sig-name descname"><span class="pre">recv_pending</span></code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#recv_pending" title="Permalink to this definition">¶</a></dt>
+<dd><p>Number of CAN frames in the receive FIFO</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns</dt>
+<dd class="field-odd"><p>the number of CAN frames pending in the receive FIFO (including any elements of type <cite>None</cite>)</p>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p>int</p>
+</dd>
+</dl>
+</dd></dl>
+
+<hr class="docutils" />
+<dl class="py method">
+<dt id="get_send_space">
+<code class="sig-name descname"><span class="pre">get_send_space</span></code><span class="sig-paren">(</span><span class="optional">[</span><em class="sig-param"><span class="pre">fifo=False</span></em><span class="optional">]</span><span class="sig-paren">)</span><a class="headerlink" href="#get_send_space" title="Permalink to this definition">¶</a></dt>
+<dd><p>Number of slots for CAN frames in the transmit priority queue or FIFO</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns</dt>
+<dd class="field-odd"><p>the space in the transmit FIFO (if <cite>fifo</cite> is <cite>False</cite>) else the space in the transmit priority queue</p>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p>int</p>
+</dd>
+</dl>
+</dd></dl>
+
+<hr class="docutils" />
+<dl class="py method">
+<dt id="get_status">
+<code class="sig-name descname"><span class="pre">get_status</span></code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#get_status" title="Permalink to this definition">¶</a></dt>
+<dd><dl class="field-list simple">
+<dt class="field-odd">Returns</dt>
+<dd class="field-odd"><p>a tuple of four elements: a bool indicating bus-off state, a bool indicating error passive state
+an int representing the Transmit Error Counter, and an int representing the Receive Error Counter</p>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p>tuple</p>
+</dd>
+</dl>
+</dd></dl>
+
+<hr class="docutils" />
+<dl class="py method">
+<dt id="get_time">
+<code class="sig-name descname"><span class="pre">get_time</span></code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#get_time" title="Permalink to this definition">¶</a></dt>
+<dd><dl class="field-list simple">
+<dt class="field-odd">Returns</dt>
+<dd class="field-odd"><p>The value of the free-running timer used for timestamping transmitted and received CAN frames</p>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p>int</p>
+</dd>
+</dl>
+<p>The time is represented by an incrementing integer that wraps around to 0. See <a class="reference internal" href="../cantop.html#controller-specifics"><span class="std std-ref">Controller specifics</span></a> for
+details on the controller-specific mapping of this count value to real-time.</p>
+</dd></dl>
+
+</div>
+<div class="section" id="profiles">
+<span id="id1"></span><h2>Profiles<a class="headerlink" href="#profiles" title="Permalink to this headline">¶</a></h2>
+<p>The table below gives the CAN bit rate settings for the valid profiles (in the future more profiles may be added).</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 16%" />
+<col style="width: 30%" />
+<col style="width: 24%" />
+<col style="width: 30%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Profile</p></th>
+<th class="head"><p>Bit rate (Kbit/sec)</p></th>
+<th class="head"><p>Sample point (%)</p></th>
+<th class="head"><p>Pre-defined constant</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>0</p></td>
+<td><p>500</p></td>
+<td><p>75</p></td>
+<td><p><cite>BITRATE_500K_75</cite></p></td>
+</tr>
+<tr class="row-odd"><td><p>1</p></td>
+<td><p>250</p></td>
+<td><p>75</p></td>
+<td><p><cite>BITRATE_250K_75</cite></p></td>
+</tr>
+<tr class="row-even"><td><p>2</p></td>
+<td><p>125</p></td>
+<td><p>75</p></td>
+<td><p><cite>BITRATE_125K_75</cite></p></td>
+</tr>
+<tr class="row-odd"><td><p>3</p></td>
+<td><p>1000</p></td>
+<td><p>75</p></td>
+<td><p><cite>BITRATE_1M_75</cite></p></td>
+</tr>
+<tr class="row-even"><td><p>4</p></td>
+<td><p>500</p></td>
+<td><p>50</p></td>
+<td><p><cite>BITRATE_500K_50</cite></p></td>
+</tr>
+<tr class="row-odd"><td><p>5</p></td>
+<td><p>250</p></td>
+<td><p>50</p></td>
+<td><p><cite>BITRATE_250K_50</cite></p></td>
+</tr>
+<tr class="row-even"><td><p>6</p></td>
+<td><p>125</p></td>
+<td><p>50</p></td>
+<td><p><cite>BITRATE_125K_50</cite></p></td>
+</tr>
+<tr class="row-odd"><td><p>7</p></td>
+<td><p>1000</p></td>
+<td><p>50</p></td>
+<td><p><cite>BITRATE_1M_75</cite></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="section" id="examples">
+<h2>Examples<a class="headerlink" href="#examples" title="Permalink to this headline">¶</a></h2>
+<p>In all the examples, the classes are assumed to have been imported with:</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">rp2</span> <span class="k">import</span> <span class="o">*</span>
+</pre></div>
+</div>
+<p>To create (and initialize) a CAN controller:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">c</span> <span class="o">=</span> <span class="n">CAN</span><span class="p">()</span>
+</pre></div>
+</div>
+<p>This initializes the CAN controller on the board with the default profile (500kbit/sec, 75% sample point)
+and sets up the ID filtering to receive all frames.</p>
+<p>To use a different bus bit rate:</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">c</span> <span class="o">=</span> <span class="n">CAN</span><span class="p">(</span><span class="n">profile</span><span class="o">=</span><span class="n">CAN</span><span class="o">.</span><span class="n">BITRATE_250K_75</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>To pick up the received CAN frames:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">frames</span> <span class="o">=</span> <span class="n">c</span><span class="o">.</span><span class="n">recv</span><span class="p">()</span>
+</pre></div>
+</div>
+<p>To run a simple bus analyzer:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="k">while</span> <span class="kc">True</span><span class="p">:</span>
+<span class="gp">&gt;&gt;&gt; </span>    <span class="n">frames</span> <span class="o">=</span> <span class="n">c</span><span class="o">.</span><span class="n">recv</span><span class="p">()</span>
+<span class="gp">&gt;&gt;&gt; </span>    <span class="k">for</span> <span class="n">frame</span> <span class="ow">in</span> <span class="n">frames</span><span class="p">:</span>
+<span class="gp">&gt;&gt;&gt; </span>        <span class="nb">print</span><span class="p">(</span><span class="n">frame</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>The bus analyzer prints each it sees (See <a class="reference internal" href="canframe.html#CANFrame" title="CANFrame"><code class="xref py py-class docutils literal notranslate"><span class="pre">CANFrame</span></code></a> for details).</p>
+<p>To set up CAN ID acceptance filters:</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">id_filters</span> <span class="o">=</span> <span class="p">{</span><span class="mi">0</span><span class="p">:</span> <span class="n">CANIDFilter</span><span class="p">(</span><span class="s1">&#39;1001XXXXXXX&#39;</span><span class="p">),</span> <span class="mi">1</span><span class="p">:</span> <span class="n">CANIDFilter</span><span class="p">(</span><span class="s1">&#39;XXXXXXXXXXXXXXXXXXXXXXXXX0000&#39;</span><span class="p">),</span> <span class="mi">31</span><span class="p">:</span> <span class="n">CANIDFilter</span><span class="p">())</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">c</span> <span class="o">=</span> <span class="n">CAN</span><span class="p">(</span><span class="n">id_filters</span><span class="o">=</span><span class="n">id_filters</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>The acceptance filters are set to accept all frames into the receive FIFO, but frames with an 11-bit ID where the
+top four bits are 0b1001 will have an index tag of 0 (accessed by the frame’s <a class="reference internal" href="canframe.html#get_index" title="get_index"><code class="xref py py-func docutils literal notranslate"><span class="pre">get_index()</span></code></a> method), frames
+with an extended ID where the bottom four bits are 0 will get an index tag of 1 and all other frames will
+get an index tag of 31. These tags can be used to quickly identify a frame for further processing.</p>
+<p>To only receive 11-bit standard ID frames:</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">id_filters</span> <span class="o">=</span> <span class="p">{</span><span class="mi">0</span><span class="p">:</span> <span class="n">CANIDFilter</span><span class="p">(</span><span class="s1">&#39;XXXXXXXXXXX&#39;</span><span class="p">))</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">c</span> <span class="o">=</span> <span class="n">CAN</span><span class="p">(</span><span class="n">id_filters</span><span class="o">=</span><span class="n">id_filters</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../index.html">Yes We CAN</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../intro.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../boardstop.html">Canis CAN boards</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../cantop.html">MicroPython CAN API</a><ul class="current">
+<li class="toctree-l2 current"><a class="reference internal" href="../cantop.html#api-classes">API Classes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cantop.html#fifo-transmission">FIFO transmission</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cantop.html#id-filtering">ID filtering</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cantop.html#controller-specifics">Controller specifics</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../canhacktop.html">CANHack toolkit</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../index.html">Documentation overview</a><ul>
+  <li><a href="../cantop.html">MicroPython CAN API</a><ul>
+      <li>Previous: <a href="../cantop.html" title="previous chapter">MicroPython CAN API</a></li>
+      <li>Next: <a href="canframe.html" title="next chapter"><code class="docutils literal notranslate"><span class="pre">CANFrame</span></code> — CAN frame</a></li>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" />
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2021, Ken Tindell.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 3.5.1</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+      |
+      <a href="../_sources/classes/can.rst.txt"
+          rel="nofollow">Page source</a>
+    </div>
+
+    
+
+    
+  </body>
+</html>
