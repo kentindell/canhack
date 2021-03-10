@@ -1,0 +1,201 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MicroPython CAN API &#8212; Yes We CAN  documentation</title>
+    <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+    <link rel="stylesheet" href="_static/alabaster.css" type="text/css" />
+    <script id="documentation_options" data-url_root="./" src="_static/documentation_options.js"></script>
+    <script src="_static/jquery.js"></script>
+    <script src="_static/underscore.js"></script>
+    <script src="_static/doctools.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="CAN — CAN controller" href="classes/can.html" />
+    <link rel="prev" title="Canis CAN boards" href="boardstop.html" />
+   
+  <link rel="stylesheet" href="_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <div class="section" id="micropython-can-api">
+<h1>MicroPython CAN API<a class="headerlink" href="#micropython-can-api" title="Permalink to this headline">¶</a></h1>
+<p>The CAN API is a MicroPython API for sending and receiving CAN frames. It is included in
+the <code class="docutils literal notranslate"><span class="pre">rp2</span></code> module on the Raspberry Pi Pico and is provided in the pre-built firmware in the CANHack repository (in the file <code class="docutils literal notranslate"><span class="pre">firmware.uf2</span></code>),
+specifically targeting the Canis Labs CANPico board (see the documentation on <a class="reference internal" href="boardstop.html#hardware"><span class="std std-ref">Canis CAN boards</span></a> for more details on this board).</p>
+<div class="section" id="api-classes">
+<h2>API Classes<a class="headerlink" href="#api-classes" title="Permalink to this headline">¶</a></h2>
+<p>The CAN API consists of four classes:</p>
+<ul class="simple">
+<li><p>The <code class="docutils literal notranslate"><span class="pre">CAN</span></code> class provides control and status of the CAN controller</p></li>
+<li><p>The <code class="docutils literal notranslate"><span class="pre">CANFrame</span></code> class encapsulates CAN frames, which are either created in software or by receiving them from the CAN controller hardware</p></li>
+<li><p>The <code class="docutils literal notranslate"><span class="pre">CANID</span></code> class describes a CAN ID: every CAN frame has a CAN ID, but many frames can have the same ID</p></li>
+<li><p>The <code class="docutils literal notranslate"><span class="pre">CANIDFilter</span></code> class describes how a CAN controller should identify and accept CAN frames based on their CAN ID</p></li>
+</ul>
+<div class="toctree-wrapper compound">
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="classes/can.html"><code class="docutils literal notranslate"><span class="pre">CAN</span></code> — CAN controller</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="classes/can.html#methods">Methods</a></li>
+<li class="toctree-l2"><a class="reference internal" href="classes/can.html#profiles">Profiles</a></li>
+<li class="toctree-l2"><a class="reference internal" href="classes/can.html#examples">Examples</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="classes/canframe.html"><code class="docutils literal notranslate"><span class="pre">CANFrame</span></code> — CAN frame</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="classes/canframe.html#methods">Methods</a></li>
+<li class="toctree-l2"><a class="reference internal" href="classes/canframe.html#examples">Examples</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="classes/canid.html"><code class="docutils literal notranslate"><span class="pre">CANID</span></code> — CAN identifier</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="classes/canid.html#methods">Methods</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="classes/canidfilter.html"><code class="docutils literal notranslate"><span class="pre">CANIDFilter</span></code> — CAN ID acceptance filter</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="classes/canidfilter.html#examples">Examples</a></li>
+</ul>
+</li>
+</ul>
+</div>
+</div>
+<div class="section" id="fifo-transmission">
+<span id="id1"></span><h2>FIFO transmission<a class="headerlink" href="#fifo-transmission" title="Permalink to this headline">¶</a></h2>
+<p>The CAN arbitration phase selects the highest priority frame to transmit. A well-designed CAN controller will perform internal
+arbitration on the same basis: it will enter into bus arbitration its highest priority frame. The drivers of the
+MCP2518 configure it for a priority queue of 32 frames. But when two frames with the same ID are queued then the order that
+the hardware chooses to send a frame will typically be arbitrary, and this might not be good enough in some cases. For example,
+a block message made up from multiple CAN frames must be transmitted in the correct order. To support this the drivers create
+an additional FIFO priority queue. At any point in time the frame at the head of the FIFO queue will be in the
+priority queue. Once a FIFO frame is transmitted on the CAN bus, the drivers will copy in the next frame in the FIFO queue, and
+so on.</p>
+<p>Note that the FIFO queue for the MCP2518 is implemented in software: there is a hardware FIFO queue provided by the controller
+but it suffers from <a class="reference external" href="https://kentindell.github.io/2020/06/29/can-priority-inversion/">priority inversion</a>
+with respect to the priority queue.</p>
+</div>
+<div class="section" id="id-filtering">
+<span id="id2"></span><h2>ID filtering<a class="headerlink" href="#id-filtering" title="Permalink to this headline">¶</a></h2>
+<p>The CAN protocol engine of a CAN controller receives every frame but in most applications the host software
+does not need to see all these frames. Instead, ID filters are used to filter out unwanted frames. The
+MCP2518 allows 32 ID filters. The matching filter is included in the <a class="reference internal" href="classes/canframe.html#CANFrame" title="CANFrame"><code class="xref py py-class docutils literal notranslate"><span class="pre">CANFrame</span></code></a> instance when the
+frame is received. ID filters are matched in order, so filter 0 is matched first, down to 31. If no filters
+are specified then a default ‘match all frames’ filter is defined.</p>
+<p>See <a class="reference internal" href="classes/canidfilter.html#CANIDFilter" title="CANIDFilter"><code class="xref py py-class docutils literal notranslate"><span class="pre">CANIDFilter</span></code></a> for more information on creating ID acceptance filters.</p>
+</div>
+<div class="section" id="controller-specifics">
+<span id="id3"></span><h2>Controller specifics<a class="headerlink" href="#controller-specifics" title="Permalink to this headline">¶</a></h2>
+<div class="section" id="mcp2518">
+<h3>MCP2518<a class="headerlink" href="#mcp2518" title="Permalink to this headline">¶</a></h3>
+<p>The Microchip MCP2518 CAN controller has the following hardware specific behaviors:</p>
+<blockquote>
+<div><ul class="simple">
+<li><p>The number of ID acceptance filters is limited to 32, and key values in the <cite>id_filters</cite> dictionary
+must be in the range 0..31.</p></li>
+<li><p>The number of frames in the transmit priority queue is limited to 32.</p></li>
+<li><p>The controller will automatically attempt to recover from bus-off (which requires the controller to
+see 127 idle periods of 11 recessive bits each).</p></li>
+<li><p>Pending CAN frames will be discarded when entering bus-off.</p></li>
+</ul>
+</div></blockquote>
+<p>In addition there are specifics of the MCP2518 driver:</p>
+<blockquote>
+<div><ul class="simple">
+<li><p>The number of frames in the FIFO queue that feeds into the hardware
+priority queue is limited to 32.</p></li>
+<li><p>The free-running timestamp counter is a 32-bit integer counting microseconds.</p></li>
+</ul>
+</div></blockquote>
+</div>
+</div>
+</div>
+
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="index.html">Yes We CAN</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="intro.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="boardstop.html">Canis CAN boards</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">MicroPython CAN API</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#api-classes">API Classes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#fifo-transmission">FIFO transmission</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id-filtering">ID filtering</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#controller-specifics">Controller specifics</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="canhacktop.html">CANHack toolkit</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="index.html">Documentation overview</a><ul>
+      <li>Previous: <a href="boardstop.html" title="previous chapter">Canis CAN boards</a></li>
+      <li>Next: <a href="classes/can.html" title="next chapter"><code class="docutils literal notranslate"><span class="pre">CAN</span></code> — CAN controller</a></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" />
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2021, Ken Tindell.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 3.5.1</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+      |
+      <a href="_sources/cantop.rst.txt"
+          rel="nofollow">Page source</a>
+    </div>
+
+    
+
+    
+  </body>
+</html>

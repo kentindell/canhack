@@ -1,0 +1,151 @@
+.. _hardware:
+
+Canis CAN boards
+****************
+
+.. _CANHack board:
+
+CANHack board
+=============
+
+The Canis CANHack board interfaces to the CANHack toolkit software to demonstrate CAN protocol attacks. It
+interfaces to the Raspberry Pi Pico as a "sock" where the Pico is soldered on to the CANHack board.
+
+.. image:: canhack.jpeg
+
+The board contains just a CAN transceiver with RX and TX wired directly to GPIO pins of the Pico. There is one
+further pin provided: TRIG. This for future expansion, intended to produce a trigger pulse to a logic analyzer
+when certain conditions are detected.
+
+The CANHack board contains a header to interface to a logic analyzer or mixed signal oscilloscope,
+ith the following connections:
+
+- Digital 3.3V TRIG output to trigger the scope/analyzer
+- Digital 3.3V CAN RX digital signal from the CAN transceiver
+- Digital 3.3V CAN TX digital signal to the CAN tranceiver
+- CAN H
+- CAN L
+
+The connections on the Pico pins are as follows:
+
++------------+----------------------+------------------+-----------+-----------------------------------------+
+| Pico pin   | Pico Function        | PCB name         | Direction | Description                             |
++============+======================+==================+===========+=========================================+
+| 29         | GP22                 | CANTX            | Out       | TX on the CAN transceiver               |
++------------+----------------------+------------------+-----------+-----------------------------------------+
+| 27         | GP21                 | CANRX            | In        | RX on the CAN transceiver               |
++------------+----------------------+------------------+-----------+-----------------------------------------+
+| 4          | GP2                  | TRIG             | Out       | Debugging / trigger pin                 |
++------------+----------------------+------------------+-----------+-----------------------------------------+
+
+.. _CANPico:
+
+CANPico board
+=============
+
+The CANPico board contains an Microchip MCP2518 CAN controller (interfaced over SPI) and a
+Microchip MCP2562FD CAN transceiver.
+
+.. image:: canpico.jpg
+
+The MCP2518 CAN controller is connected to SPI 1 of the Pico and is clocked with a 40MHz crystal, allowing
+SPI clock rates up to about 18MHz. The board includes a header with the same pinout as the CANHack board:
+
+- Digital 3.3V TRIG output to trigger the scope/analyzer
+- Digital 3.3V CAN RX digital signal from the CAN transceiver
+- Digital 3.3V CAN TX digital signal to the CAN tranceiver
+- CAN H
+- CAN L
+
+There are additional GPIO pins allocated to the CANPico board:
+
+- The SOF pin has an edge applied when Start-of-Frame in the CAN protocol is detected by the controller
+- The STBY pin is an output that driver the transceiver into standby mode (to reduce power consumption when inactive)
+- An IRQ pin to trigger an interrupt service routine (ISR) on the Pico to handle CAN events in the controller
+
+The table below gives the pins used by the CANPico board:
+
++------------+----------------------+------------------+-----------+-----------------------------------------+
+| Pico pin   | Pico Function        | PCB name         | Direction | Description                             |
++============+======================+==================+===========+=========================================+
+| 29         | GP22                 | CANTX            | Out       | TX on the CAN transceiver               |
++------------+----------------------+------------------+-----------+-----------------------------------------+
+| 27         | GP21                 | CANRX            | In        | RX on the CAN transceiver               |
++------------+----------------------+------------------+-----------+-----------------------------------------+
+| 4          | GP2                  | TRIG             | Out       | Trigger pin                             |
++------------+----------------------+------------------+-----------+-----------------------------------------+
+| 11         | SPI1_Rx              | MISO             | In        | SPI microcontroller in peripheral out   |
++------------+----------------------+------------------+-----------+-----------------------------------------+
+| 14         | SPI1_SCK             | SCK              | Out       | SPI clock                               |
++------------+----------------------+------------------+-----------+-----------------------------------------+
+| 15         | SPI1_Tx              | MOSI             | Out       | SPI microcontroller out peripheral in   |
++------------+----------------------+------------------+-----------+-----------------------------------------+
+| 9          | GP6                  | CSn              | Out       | Peripheral chip select                  |
++------------+----------------------+------------------+-----------+-----------------------------------------+
+| 7          | GP5                  | IRQ              | In        | Peripheral interrupt request            |
++------------+----------------------+------------------+-----------+-----------------------------------------+
+| 6          | GP4                  | SOF              | In        | Peripheral Start-of-frame               |
++------------+----------------------+------------------+-----------+-----------------------------------------+
+| 5          | GP3                  | STBY             | Out       | Peripheral low-power standby mode       |
++------------+----------------------+------------------+-----------+-----------------------------------------+
+
+CANPico board test functions
+----------------------------
+
+There is a method defined in MicroPython (included in the :py:class:`CANID` class) to help to test and debug
+the board.
+
+.. py:method:: test_spi([, init=False] [, select=False] [, deselect=False] [, write_word=False] [, addr=0] [, value=0] [, read_word=False] [, read_words=False] [, write_words=False])
+
+    Tests the SPI interface to the MCP2518 CAN controller.
+
+    :return: `None` or int or a tuple of four ints
+
+++++++++
+
+Examples
+++++++++
+
+All the examples assume a `CANID` instance has been created with:
+
+    >>> t = rp2.CANID(0)
+
+To initialize the SPI controller in the Pico:
+
+    >>> t.test_spi(init_spi=True)
+
+This will set SPI1 in the RP2040 to run with a clock of about 15MHz (this only needs to be run once).
+
+To set the CSn pin to 0:
+
+    >>> t.test_spi(select=True)
+
+To set the CSn pin to 1:
+
+    >>> t.test_spi(deselect=True)
+
+To write a value to address 0x400 (the first word of the buffer RAM in the controller:
+
+    >>> t.test_spi(select=True, addr=0x400, write_word=True)
+    >>> t.test_spi(deselect=True)
+
+To read and print in hex a value from address 0x400:
+
+    >>> w = t.test_spi(select=True, addr=0x400, read_word=True)
+    >>> t.test_spi(deselect=True)
+    >>> print("0x{:08x}".format(w))
+
+To read and print in hex four values starting from address 0x400:
+
+    >>> words = t.test_spi(select=True, addr=0x400, read_words=True)
+    >>> t.test_spi(deselect=True)
+    >>> for w in words:
+    ...     print("0x{:08x}".format(w))
+
+To write four specific words (`0xdeadbeef`, `0xcafef00d`, `0x01e551ca`, and `0x01020304`) to a starting address:
+
+    >>> t.test_spi(select=True, addr=0x400, write_words=True)
+    >>> t.test_spi(deselect=True)
+
+These functions allow the basic SPI interface to be tested with a logic analyzer to see various pins are driven
+correctly and to see that values can be read correctly from the controller.

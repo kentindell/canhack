@@ -1,0 +1,45 @@
+``CANID`` --- CAN identifier
+=============================
+
+.. py:class:: CANID(canid, [extended=False])
+
+    Represents a CAN identifier.
+
+    :param int canid: The CAN identifier of the frame
+    :param extended: Set to `True` if the ID is a 29-bit identifier.
+
+    :raises ValueError: if `canid` is not in the range 0..0x7ff (when `extended` is `False`) or 0..0x1fffffff (when `extended` is `True`).
+
+    A :py:class:`CANID` instance is created either directly or is returned from
+    the :py:meth:`get_canid` call.
+
+
+Methods
+--------
+
+.. py:method:: is_extended()
+
+    Indicates if the CAN ID is a standard 11-bit ID or an extended 29-bit ID.
+
+    :return: `True` if the CAN ID is a 29-bit identifier
+    :rtype: bool
+
+++++++++++
+
+.. py:method:: get_id()
+
+    Returns the integer value of the CAN ID
+
+    :return: the frame's CAN ID represented as an integer
+    :rtype: int
+
+++++++++++
+
+.. py:method:: get_id_filter()
+
+    Returns a CAN ID filter that accepts this (and only this) ID
+
+    :return: the ID filter for the CAN ID
+    :rtype: :py:class:`CANIDFilter`
+
+

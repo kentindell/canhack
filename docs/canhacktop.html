@@ -1,0 +1,215 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CANHack toolkit &#8212; Yes We CAN  documentation</title>
+    <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+    <link rel="stylesheet" href="_static/alabaster.css" type="text/css" />
+    <script id="documentation_options" data-url_root="./" src="_static/documentation_options.js"></script>
+    <script src="_static/jquery.js"></script>
+    <script src="_static/underscore.js"></script>
+    <script src="_static/doctools.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="CANHack — CANHack toolkit" href="classes/canhack.html" />
+    <link rel="prev" title="CANIDFilter — CAN ID acceptance filter" href="classes/canidfilter.html" />
+   
+  <link rel="stylesheet" href="_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <div class="section" id="canhack-toolkit">
+<h1>CANHack toolkit<a class="headerlink" href="#canhack-toolkit" title="Permalink to this headline">¶</a></h1>
+<p>The CANHack toolkit is software that bit-bangs the minimal parts of the CAN protocol to mount various attacks on a CAN bus.
+It is designed to demonstrate how easy it is with just software access to a pair of GPIO pins connected to RX and TX of a CAN
+transceiver to attack a CAN bus right down at the protocol level, with many attacks that are invisible to a simple bus monitor
+operating at the CAN frame level. In essence, any device on CAN that can be compromised (e.g. via a buffer overrun remote
+execution vulnerability) can mount these attacks on the bus.</p>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p><strong>USING CANHACK CONNECTED TO A REAL VEHICLE IS AT YOUR OWN RISK!</strong></p>
+<p>It’s quite common for vehicle ECUs to detect
+conditions like bus-off and treat these as a hardware faults, storing a diagnostic trouble code and then shutting off CAN
+communications. This will look very like bricking your car so it is best to use CANHack on a benchtop system rather than
+the real thing.</p>
+</div>
+<p>The CANHack toolkit consists of two parts:</p>
+<blockquote>
+<div><ul class="simple">
+<li><p>Generic C code that can run on any embedded device</p></li>
+<li><p>A MicroPython wrapper around the C CANHack to make it available as a MicroPython class</p></li>
+</ul>
+</div></blockquote>
+<p>CANHack needs to run on a microcontroller with access to a free-running counter/timer and a CAN transceiver
+that can be access via a pair of GPIO pins (on-chip CAN controllers can nearly always be by-passed by programming
+a pin-mux to allow software control of the CAN controllers’s RX/TX pins).</p>
+<div class="section" id="api-classes">
+<h2>API Classes<a class="headerlink" href="#api-classes" title="Permalink to this headline">¶</a></h2>
+<p>The CANHack toolkit consists of single MicroPython class.</p>
+<div class="toctree-wrapper compound">
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="classes/canhack.html"><code class="docutils literal notranslate"><span class="pre">CANHack</span></code> — CANHack toolkit</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="classes/canhack.html#methods">Methods</a></li>
+<li class="toctree-l2"><a class="reference internal" href="classes/canhack.html#diagnostic-methods">Diagnostic methods</a></li>
+</ul>
+</li>
+</ul>
+</div>
+</div>
+<div class="section" id="microcontroller-resources">
+<h2>Microcontroller resources<a class="headerlink" href="#microcontroller-resources" title="Permalink to this headline">¶</a></h2>
+<p>The toolkit uses three GPIO pins, as specified in the table below and the free-running
+counter of PWM 7.</p>
+<blockquote>
+<div><table class="docutils align-default">
+<colgroup>
+<col style="width: 13%" />
+<col style="width: 24%" />
+<col style="width: 19%" />
+<col style="width: 44%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Pico pin</p></th>
+<th class="head"><p>Function</p></th>
+<th class="head"><p>Name</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>29</p></td>
+<td><p>GP22</p></td>
+<td><p>CANTX</p></td>
+<td><p>TX on the CAN transceiver</p></td>
+</tr>
+<tr class="row-odd"><td><p>27</p></td>
+<td><p>GP21</p></td>
+<td><p>CANRX</p></td>
+<td><p>RX on the CAN transceiver</p></td>
+</tr>
+<tr class="row-even"><td><p>4</p></td>
+<td><p>GPIO2</p></td>
+<td><p>TRIG</p></td>
+<td><p>Debugging / trigger pin</p></td>
+</tr>
+</tbody>
+</table>
+</div></blockquote>
+</div>
+<div class="section" id="canhack-hardware">
+<h2>CANHack hardware<a class="headerlink" href="#canhack-hardware" title="Permalink to this headline">¶</a></h2>
+<p>The <a class="reference internal" href="boardstop.html#canhack-board"><span class="std std-ref">CANHack board</span></a> provides a CAN transceiver to be driven <a class="reference internal" href="classes/canhack.html#CANHack" title="CANHack"><code class="xref py py-class docutils literal notranslate"><span class="pre">CANHack</span></code></a> API. An alternative is
+to make a breadboard version of this board. This is very simple: a <a class="reference external" href="https://kentindell.github.io/2021/02/06/canhack-pico/">blog post</a>
+describes how to do this.</p>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>The debug pin in the blog post is on Pico pin 15, but this has been moved in the new firmware
+to better co-exist with other hardware boards for the Pico.</p>
+</div>
+</div>
+<div class="section" id="using-canhack-on-the-canpico-board">
+<h2>Using CANHack on the CANPico board<a class="headerlink" href="#using-canhack-on-the-canpico-board" title="Permalink to this headline">¶</a></h2>
+<p>The <a class="reference internal" href="boardstop.html#canpico"><span class="std std-ref">CANPico board</span></a> can also run the CANHack toolkit: it uses the same pins. Although the CAN TX
+pin to the transceiver driven by the MCP2518 CAN controller it is possible to instruct
+the controller to put its TX output pin into open drain mode. This is done automatically by the <a class="reference internal" href="classes/can.html#CAN" title="CAN"><code class="xref py py-class docutils literal notranslate"><span class="pre">CAN</span></code></a>
+constructor. To stop the CAN controller from being taken online and driving the pin the
+drivers are instructed to leave the controller in configuration mode and not to start:</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">rp2</span><span class="o">.</span><span class="n">CAN</span><span class="p">(</span><span class="n">start</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Once the controller has been set up the <a class="reference internal" href="classes/canhack.html#CANHack" title="CANHack"><code class="xref py py-class docutils literal notranslate"><span class="pre">CANHack</span></code></a> API can then be used as normal.</p>
+</div>
+</div>
+
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="index.html">Yes We CAN</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="intro.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="boardstop.html">Canis CAN boards</a></li>
+<li class="toctree-l1"><a class="reference internal" href="cantop.html">MicroPython CAN API</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">CANHack toolkit</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#api-classes">API Classes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#microcontroller-resources">Microcontroller resources</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#canhack-hardware">CANHack hardware</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#using-canhack-on-the-canpico-board">Using CANHack on the CANPico board</a></li>
+</ul>
+</li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="index.html">Documentation overview</a><ul>
+      <li>Previous: <a href="classes/canidfilter.html" title="previous chapter"><code class="docutils literal notranslate"><span class="pre">CANIDFilter</span></code> — CAN ID acceptance filter</a></li>
+      <li>Next: <a href="classes/canhack.html" title="next chapter"><code class="docutils literal notranslate"><span class="pre">CANHack</span></code> — CANHack toolkit</a></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" />
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2021, Ken Tindell.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 3.5.1</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+      |
+      <a href="_sources/canhacktop.rst.txt"
+          rel="nofollow">Page source</a>
+    </div>
+
+    
+
+    
+  </body>
+</html>
