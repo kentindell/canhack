@@ -178,7 +178,9 @@ class CANBit:
         :param canbit: the current CAN bit
         :return: True if the bit has ended
         """
+        assert canrx in ['1', '0']
         bit_end = False
+
         # Wait for a falling edge after a '1' sample or for the sample point of the next bit, whichever comes first
         if cls.sampling:
             if falling_edge and cls.canrx_sample == '1':
@@ -208,6 +210,8 @@ class CANBit:
                 cls.next_event_samplenum = samplenum + cls.sample_point_samples
                 cls.sampling = True
                 bit_end = True
+        if bit_end:
+            assert canbit.value in ['1', '0']
         return bit_end
 
     @classmethod
@@ -392,7 +396,10 @@ class CANField:
         :param canbit: the current CAN bit
         :return: Field just finished, or None if none
         """
+        assert canbit.value in ['1', '0']
+
         field = cls.get_current_field()
+
         if field.name == 'data':
             cls.data_bytes[-1].canbits.append(canbit)
 
@@ -615,6 +622,7 @@ class Decoder(srd.Decoder):
     options = (
         {'id': 'can-bitrate', 'desc': 'CAN bit rate (Hz)', 'default': 500000},
         {'id': 'can-samplepoint', 'desc': 'Sample point (%)', 'default': 75},
+        {'id': 'can-datadisplay', 'desc': 'Data display', 'default': 'Hex', 'values': ('Hex', 'Hex and ASCII')},
     )
     binary = (
         ('pcapng', 'The pcapng packet capture format used by Wireshark'),
@@ -678,6 +686,8 @@ class Decoder(srd.Decoder):
     )
 
     def __init__(self, **kwargs):
+        self.display_hex = True
+        self.display_ascii = None  # type: bool
         self.can_bit_time_ns = None  # type: float
         self.can_sample_point = None  # type: float
         # This is the logic analyzer / oscilloscope sample rate
@@ -698,6 +708,8 @@ class Decoder(srd.Decoder):
         return self.sample_period_ns * numsamples
 
     def reset(self):
+        self.display_hex = True
+        self.display_ascii = self.options['can-datadisplay'] != 'Hex'
         self.can_bit_time_ns = 1000000000 / self.options['can-bitrate']
         self.can_sample_point = self.options['can-samplepoint'] / 100
         CANField.reset()
@@ -711,6 +723,7 @@ class Decoder(srd.Decoder):
         self.out_binary = self.register(srd.OUTPUT_BINARY)
 
     def decode_events(self, canbit: CANBit, falling_edge: bool, rising_edge: bool, canrx: str) -> CANBit:
+        assert canrx in ['1', '0']
         end_of_canbit = CANBit.bitstream(samplenum=self.samplenum,
                                          falling_edge=falling_edge,
                                          canrx=canrx,
@@ -793,9 +806,16 @@ class Decoder(srd.Decoder):
     def put_can_payload(self):
         for i in range(len(CANField.data_bytes)):
             databyte = CANField.data_bytes[i]
-            data = [Annotation.lookup('can-payload'), ["DATA{}=0x{:02x}".format(i, databyte.get_value()),
-                                                       "0x{:02x}".format(databyte.get_value()),
-                                                       ""]]
+            b = databyte.get_value()
+            if self.display_ascii:
+                a = str(bytes([b]))[1:]
+                data = [Annotation.lookup('can-payload'), ["DATA{}=0x{:02x} {}".format(i, b, a),
+                                                           "0x{:02x} {}".format(b, a),
+                                                           ""]]
+            else:
+                data = [Annotation.lookup('can-payload'), ["DATA{}=0x{:02x}".format(i, b),
+                                                           "0x{:02x}".format(b),
+                                                           ""]]
             self.put(databyte.canbits[0].start_samplenum, databyte.canbits[-1].end_samplenum, self.out_ann, data)
 
     def put_can_id(self):
