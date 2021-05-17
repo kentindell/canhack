@@ -4,9 +4,13 @@ Release 2021-05-10 of the CANPico firmware
 This is built on the v1.15 release of MicroPython for the Pico with the CANPico board (the firmware
 also runs on the CANHack board but the CAN API is not supported).
 
-The pre-built firmware has a tag of v1.15-canpico and reports this when REPL starts:
+The pre-built firmware (firmware-20210510.uf2) has a tag of v1.15-canpico and reports this when REPL starts:
 
     MicroPython v1.15-canpico on 2021-05-10; Raspberry Pi Pico with RP2040
+
+The MD5 hash of the firmware binary firmware-20210510.uf2 is:
+
+afc1fb59d4f678590ff90dbb20725808
 
 The source code for the CANPico support is supplied as a patch. To apply and build the firmware
 from source do the following:
