@@ -815,6 +815,7 @@ class Decoder(srd.Decoder):
             else:
                 data = [Annotation.lookup('can-payload'), ["DATA{}=0x{:02x}".format(i, b),
                                                            "0x{:02x}".format(b),
+                                                           "{:02x}".format(b),
                                                            ""]]
             self.put(databyte.canbits[0].start_samplenum, databyte.canbits[-1].end_samplenum, self.out_ann, data)
 
