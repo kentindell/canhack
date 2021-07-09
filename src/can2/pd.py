@@ -17,6 +17,7 @@
 ## along with this program; if not, see <http://www.gnu.org/licenses/>.
 ##
 import struct
+import string
 from collections import OrderedDict, namedtuple
 import sigrokdecode as srd
 
@@ -696,6 +697,7 @@ class Decoder(srd.Decoder):
         self.sample_period_ns = None  # type: float
         self.out_ann = None
         self.out_binary = None
+        self.printables = set(string.printable)
 
     def metadata(self, key, value):
         if key == srd.SRD_CONF_SAMPLERATE:
@@ -810,7 +812,7 @@ class Decoder(srd.Decoder):
         for i in range(len(CANField.data_bytes)):
             databyte = CANField.data_bytes[i]
             b = databyte.get_value()
-            if self.display_ascii:
+            if self.display_ascii and chr(b) in self.printables:
                 a = str(bytes([b]))[1:]
                 data = [Annotation.lookup('can-payload'), ["DATA{}=0x{:02x} {}".format(i, b, a),
                                                            "0x{:02x} {}".format(b, a),
@@ -827,7 +829,7 @@ class Decoder(srd.Decoder):
         for i in range(len(CANField.data_bytes)):
             bs.append(CANField.data_bytes[i].get_value())
         if self.display_ascii:
-            cs = str(bytes(bs))[1:]
+            cs = "'" + ''.join(chr(i) if chr(i) in self.printables else '.' for i in bs) + "'"
             bs = bytes(bs).hex()
             data = [Annotation.lookup('data'), ["DATA=0x{} {}".format(bs, cs),
                                                 "0x{} {}".format(bs, cs),
