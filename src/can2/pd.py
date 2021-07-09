@@ -661,7 +661,7 @@ class Decoder(srd.Decoder):
     annotations = Annotation.get_annotations()
     annotation_rows = (
         ('row-bits', "Bits", Annotation.get_annotation_row(['bit', 'stuffbit'])),
-        ('row-can-fields', "Fields", Annotation.get_annotation_row(['data',
+        ('row-can-fields', "Fields", Annotation.get_annotation_row(['can-payload',
                                                                     'sof',
                                                                     'eof',
                                                                     'ida',
@@ -682,7 +682,7 @@ class Decoder(srd.Decoder):
                                                                     'error-delimiter',
                                                                     'ifs',
                                                                     'idle'])),
-        ('row-can-payload', "Payload", Annotation.get_annotation_row(['can-id', 'can-payload'])),
+        ('row-can-payload', "Payload", Annotation.get_annotation_row(['can-id', 'data'])),
         ('row-can-warning', "Info", Annotation.get_annotation_row(['can-warning', 'can-info'])),
     )
 
