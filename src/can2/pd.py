@@ -829,6 +829,8 @@ class Decoder(srd.Decoder):
             can_id_strs = ["ID=0x{:08x} (Extended)".format(can_id),
                            "ID=0x{:08x} (Ext)".format(can_id),
                            "ID=0x{:08x}E".format(can_id),
+                           "ID={:08x}".format(can_id),
+                           "{:08x}".format(can_id),
                            "ID(Ext)",
                            "ID",
                            ""]
@@ -838,6 +840,8 @@ class Decoder(srd.Decoder):
             can_id_strs = ["ID=0x{:03x} (Standard)".format(can_id),
                            "ID=0x{:03x} (Std)".format(can_id),
                            "ID=0x{:03x}".format(can_id),
+                           "ID={:03x}".format(can_id),
+                           "{:03x}".format(can_id),
                            "ID(Std)",
                            "ID(S)",
                            "ID",
