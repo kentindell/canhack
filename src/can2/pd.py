@@ -325,7 +325,8 @@ class CANField:
         elif self.name == 'dlc':
             descriptions = ["DLC 0x{:x}".format(value), "DLC"]
         elif self.name == 'data':
-            descriptions = ["DATA", "D", ""]
+            # An empty list of descriptions will cause the field not to be displayed
+            return 0, 0, []
         elif self.name == 'crc':
             descriptions = ["CRC 0x{:04x}".format(value), "CRC"]
         elif self.name == 'superposition':
@@ -752,6 +753,8 @@ class Decoder(srd.Decoder):
                 if field.name == 'idle' and CANField.get_current_field().name == 'ida':
                     self.put_can_field(field=CANField.fields['sof'])
                 if field.name == 'data':
+                    self.put_can_payloads()
+                if field.name == 'crc':
                     self.put_can_payload()
                 if field.name == 'r0':
                     self.put_can_id()
@@ -803,7 +806,7 @@ class Decoder(srd.Decoder):
             data = [Annotation.lookup('bit'), [canbit.value, '']]
         self.put(canbit.start_samplenum, canbit.end_samplenum, self.out_ann, data)
 
-    def put_can_payload(self):
+    def put_can_payloads(self):
         for i in range(len(CANField.data_bytes)):
             databyte = CANField.data_bytes[i]
             b = databyte.get_value()
@@ -818,6 +821,28 @@ class Decoder(srd.Decoder):
                                                            "{:02x}".format(b),
                                                            ""]]
             self.put(databyte.canbits[0].start_samplenum, databyte.canbits[-1].end_samplenum, self.out_ann, data)
+
+    def put_can_payload(self):
+        bs = list()
+        for i in range(len(CANField.data_bytes)):
+            bs.append(CANField.data_bytes[i].get_value())
+        if self.display_ascii:
+            cs = str(bytes(bs))[1:]
+            bs = bytes(bs).hex()
+            data = [Annotation.lookup('data'), ["DATA=0x{} {}".format(bs, cs),
+                                                "0x{} {}".format(bs, cs),
+                                                "DATA",
+                                                "D",
+                                                ""]]
+        else:
+            bs = bytes(bs).hex()
+            data = [Annotation.lookup('data'), ["DATA=0x{}".format(bs),
+                                                "0x{}".format(bs),
+                                                "{}".format(bs),
+                                                "DATA",
+                                                "D",
+                                                ""]]
+        self.put(CANField.data_bytes[0].canbits[0].start_samplenum, CANField.data_bytes[-1].canbits[-1].end_samplenum, self.out_ann, data)
 
     def put_can_id(self):
         ide = CANField.fields['ide']  # type: CANField
