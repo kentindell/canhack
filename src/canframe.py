@@ -1,3 +1,4 @@
+from binascii import hexlify
 from typing import Dict
 
 
@@ -379,9 +380,43 @@ class CANFrame:
         return frame
 
 
+def is_janus(payload_a, payload_b, id_a, id_b=0, ide=False) -> bool:
+    f_a = CANFrame(id_a=id_a, id_b=id_b, ide=ide, data=payload_a)
+    f_b = CANFrame(id_a=id_a, id_b=id_b, ide=ide, data=payload_b)
+
+    bitseq_a = f_a.bitseq()
+    bitseq_b = f_b.bitseq()
+
+    # Check 1: both frames must be the same length
+    if len(bitseq_a) != len(bitseq_b):
+        return False
+
+    # Check 2: if 10 then must be the same until back in sync
+    synced = True
+    for i in range(len(bitseq_a)):
+        if synced:
+            if bitseq_a[i] == '1' and bitseq_b[i] == '0':
+                synced = False
+        else:
+            if bitseq_a[i] != bitseq_b[i]:
+                return False
+            if bitseq_a[i] == '1':
+                synced = True
+
+    return True
+
+
 if __name__ == '__main__':
     f = CANFrame(id_a=0x14, data=bytes([0x01]))
     f.print(detailed=True)
 
     frame = CANFrame.from_bitseq(f.bitseq())
     frame['can_frame'].print(detailed=True)
+
+    payload_a = bytes([0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xf0, 0x0d])
+    for b in range(256):
+        for b_dash in range(256):
+            payload_b = bytes([0xde, 0xad, 0xbe, 0xef, b_dash, b, 0xf0, 0x0d])
+            if payload_a != payload_b and is_janus(id_a=0x123, payload_a=payload_a, payload_b=payload_b):
+                print("Match: Payload A={}".format(hexlify(payload_a)))
+                print("       Payload B={}".format(hexlify(payload_b)))
