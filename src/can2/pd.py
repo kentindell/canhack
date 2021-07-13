@@ -711,6 +711,7 @@ class Decoder(srd.Decoder):
         return self.sample_period_ns * numsamples
 
     def reset(self):
+        # TODO This is called when the Run button is hit, so is a good place to send a command over MIN to set an advanced trigger
         self.display_hex = True
         self.display_ascii = self.options['can-datadisplay'] != 'Hex'
         self.can_bit_time_ns = 1000000000 / self.options['can-bitrate']
