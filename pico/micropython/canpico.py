@@ -17,9 +17,13 @@ and used like this from a REPL prompt:
 
 from struct import pack, unpack
 from machine import Pin
-from time import sleep_ms
-from rp2 import CAN, CANFrame, CANID, CANHack
+from rp2 import CAN, CANFrame, CANID, CANHack, MIN
 from utime import sleep, sleep_ms
+
+urgent = CANFrame(CANID(0x10), data=b'urgent')
+slow = CANFrame(CANID(0x700))
+medium_frames = [CANFrame(CANID(0x300 + i), data=bytes([i])) for i in range(10)]
+sync_frames = [CANFrame(CANID(0)), CANFrame(CANID(1), data=b'deadbeef')]
 
 
 class CANPico:
@@ -117,3 +121,25 @@ class CANPico:
         self.ch.set_frame(can_id=f.get_arbitration_id(), extended=f.is_extended(), remote=f.is_remote(), data=f.get_data())
         self.ch.spoof_frame(timeout=timeout)
 
+    def minmon(self):
+        m = MIN()
+        while True:
+            b = self.c.recv(as_bytes=True)
+            if b:
+                m.send_frame(1, b)
+            m.recv()
+
+    def recv_wait(self):
+        self.c.recv()  # Throw away any left-over pending frames
+        while True:
+            frames = self.c.recv()
+            if len(frames) > 0:
+                return frames
+
+    def sync_send_frame(self, f):
+        self.recv_wait()
+        self.c.send_frame(f)
+
+    def sync_send_frames(self, frames, fifo=False):
+        self.recv_wait()
+        self.c.send_frames(frames, fifo=fifo)
