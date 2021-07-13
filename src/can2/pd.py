@@ -17,6 +17,7 @@
 ## along with this program; if not, see <http://www.gnu.org/licenses/>.
 ##
 import struct
+import string
 from collections import OrderedDict, namedtuple
 import sigrokdecode as srd
 
@@ -325,7 +326,8 @@ class CANField:
         elif self.name == 'dlc':
             descriptions = ["DLC 0x{:x}".format(value), "DLC"]
         elif self.name == 'data':
-            descriptions = ["DATA", "D", ""]
+            # An empty list of descriptions will cause the field not to be displayed
+            return 0, 0, []
         elif self.name == 'crc':
             descriptions = ["CRC 0x{:04x}".format(value), "CRC"]
         elif self.name == 'superposition':
@@ -660,7 +662,7 @@ class Decoder(srd.Decoder):
     annotations = Annotation.get_annotations()
     annotation_rows = (
         ('row-bits', "Bits", Annotation.get_annotation_row(['bit', 'stuffbit'])),
-        ('row-can-fields', "Fields", Annotation.get_annotation_row(['data',
+        ('row-can-fields', "Fields", Annotation.get_annotation_row(['can-payload',
                                                                     'sof',
                                                                     'eof',
                                                                     'ida',
@@ -681,7 +683,7 @@ class Decoder(srd.Decoder):
                                                                     'error-delimiter',
                                                                     'ifs',
                                                                     'idle'])),
-        ('row-can-payload', "Payload", Annotation.get_annotation_row(['can-id', 'can-payload'])),
+        ('row-can-payload', "Payload", Annotation.get_annotation_row(['can-id', 'data'])),
         ('row-can-warning', "Info", Annotation.get_annotation_row(['can-warning', 'can-info'])),
     )
 
@@ -695,6 +697,7 @@ class Decoder(srd.Decoder):
         self.sample_period_ns = None  # type: float
         self.out_ann = None
         self.out_binary = None
+        self.printables = set(string.printable)
 
     def metadata(self, key, value):
         if key == srd.SRD_CONF_SAMPLERATE:
@@ -752,6 +755,8 @@ class Decoder(srd.Decoder):
                 if field.name == 'idle' and CANField.get_current_field().name == 'ida':
                     self.put_can_field(field=CANField.fields['sof'])
                 if field.name == 'data':
+                    self.put_can_payloads()
+                if field.name == 'crc':
                     self.put_can_payload()
                 if field.name == 'r0':
                     self.put_can_id()
@@ -803,11 +808,11 @@ class Decoder(srd.Decoder):
             data = [Annotation.lookup('bit'), [canbit.value, '']]
         self.put(canbit.start_samplenum, canbit.end_samplenum, self.out_ann, data)
 
-    def put_can_payload(self):
+    def put_can_payloads(self):
         for i in range(len(CANField.data_bytes)):
             databyte = CANField.data_bytes[i]
             b = databyte.get_value()
-            if self.display_ascii:
+            if self.display_ascii and chr(b) in self.printables:
                 a = str(bytes([b]))[1:]
                 data = [Annotation.lookup('can-payload'), ["DATA{}=0x{:02x} {}".format(i, b, a),
                                                            "0x{:02x} {}".format(b, a),
@@ -815,8 +820,31 @@ class Decoder(srd.Decoder):
             else:
                 data = [Annotation.lookup('can-payload'), ["DATA{}=0x{:02x}".format(i, b),
                                                            "0x{:02x}".format(b),
+                                                           "{:02x}".format(b),
                                                            ""]]
             self.put(databyte.canbits[0].start_samplenum, databyte.canbits[-1].end_samplenum, self.out_ann, data)
+
+    def put_can_payload(self):
+        bs = list()
+        for i in range(len(CANField.data_bytes)):
+            bs.append(CANField.data_bytes[i].get_value())
+        if self.display_ascii:
+            cs = "'" + ''.join(chr(i) if chr(i) in self.printables else '.' for i in bs) + "'"
+            bs = bytes(bs).hex()
+            data = [Annotation.lookup('data'), ["DATA=0x{} {}".format(bs, cs),
+                                                "0x{} {}".format(bs, cs),
+                                                "DATA",
+                                                "D",
+                                                ""]]
+        else:
+            bs = bytes(bs).hex()
+            data = [Annotation.lookup('data'), ["DATA=0x{}".format(bs),
+                                                "0x{}".format(bs),
+                                                "{}".format(bs),
+                                                "DATA",
+                                                "D",
+                                                ""]]
+        self.put(CANField.data_bytes[0].canbits[0].start_samplenum, CANField.data_bytes[-1].canbits[-1].end_samplenum, self.out_ann, data)
 
     def put_can_id(self):
         ide = CANField.fields['ide']  # type: CANField
@@ -829,6 +857,8 @@ class Decoder(srd.Decoder):
             can_id_strs = ["ID=0x{:08x} (Extended)".format(can_id),
                            "ID=0x{:08x} (Ext)".format(can_id),
                            "ID=0x{:08x}E".format(can_id),
+                           "ID={:08x}".format(can_id),
+                           "{:08x}".format(can_id),
                            "ID(Ext)",
                            "ID",
                            ""]
@@ -838,6 +868,8 @@ class Decoder(srd.Decoder):
             can_id_strs = ["ID=0x{:03x} (Standard)".format(can_id),
                            "ID=0x{:03x} (Std)".format(can_id),
                            "ID=0x{:03x}".format(can_id),
+                           "ID={:03x}".format(can_id),
+                           "{:03x}".format(can_id),
                            "ID(Std)",
                            "ID(S)",
                            "ID",
