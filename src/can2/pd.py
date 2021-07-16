@@ -153,6 +153,7 @@ class CANBit:
     sample_point_samples = None  # type: int
     sample_to_end_samples = None  # type: int
     canrx_sample = None  # type: str
+    synced = None  # type: bool
 
     def __init__(self, start_samplenum: int):
         self.start_samplenum = start_samplenum
@@ -184,12 +185,14 @@ class CANBit:
 
         # Wait for a falling edge after a '1' sample or for the sample point of the next bit, whichever comes first
         if cls.sampling:
-            if falling_edge and cls.canrx_sample == '1':
+            if not cls.synced and falling_edge and cls.canrx_sample == '1':  # Can only sync once per bit
                 # Soft/hard sync here (we ignore SJW for simplicity), sample point moved out
                 # and we stay in the sampling state, this is the new start of the bit
                 cls.next_event_samplenum = samplenum + cls.sample_point_samples
                 # The bit re-starts here but we don't mark that: prefer to show a stretched bit
+                cls.synced = True
             elif samplenum >= cls.next_event_samplenum:
+                cls.synced = False  # Next bit, syncing re-enabled
                 canbit.value = canrx
                 cls.canrx_sample = canrx
 
@@ -202,9 +205,10 @@ class CANBit:
                 cls.sampling = False
         else:
             # Waiting for the end of a bit, having already taken the sample
-            if falling_edge and cls.canrx_sample == '1':
+            if not cls.synced and falling_edge and cls.canrx_sample == '1':
                 cls.next_event_samplenum = samplenum + cls.sample_point_samples
                 cls.sampling = True
+                cls.synced = True
                 bit_end = True
             elif samplenum >= cls.next_event_samplenum:
                 # This is the end of the bit, record this and set the future sampling time
