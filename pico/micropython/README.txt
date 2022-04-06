@@ -12,8 +12,13 @@ The MD5 hash of the firmware binary firmware-20210713.uf2 is:
 
     823db2bc6fef1082ef0cd8d3cf81f4c0
 
-The source code for the CANPico support is supplied as a patch. To apply and build the firmware
+The source code for the CANPico support is supplied as a patch to v1.15. To apply and build the firmware
 from source do the following:
+
+0. Start from the v1.15 patch baseline
+--------------------------------------
+
+This is in OLD/v1.15.patch
 
 1. Get the MicroPython source
 -----------------------------
