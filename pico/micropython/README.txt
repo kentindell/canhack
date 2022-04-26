@@ -18,6 +18,8 @@ $ cd micropython
 $ git checkout v1.18
 $ git submodule update --init
 
+(It's possible to save time by only updating the library modules pico-sdk, tinyusb and axtls: the others aren't needed for the RP2040 firmware build)
+
 2. Add MIN
 ----------
 
