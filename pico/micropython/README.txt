@@ -1,38 +1,28 @@
-Release 2021-07-13 of the CANPico firmware
+Release 2022-04-26 of the CANPico firmware
 ==========================================
 
-This is built on the v1.16 release of MicroPython for the Pico with the CANPico board (the firmware
+This is built on the v1.18 release of MicroPython for the Pico with the CANPico board (the firmware
 also runs on the CANHack board but the CAN API is not supported).
 
-The pre-built firmware (firmware-20210713.uf2) has a tag of v1.16-canpico and reports this when REPL starts:
+The pre-built firmware (firmware-20220426.uf2) reports this when REPL starts:
 
-    MicroPython v1.16-canpico on 2021-07-13; Raspberry Pi Pico with RP2040
+    MicroPython v1.18-192-g7eb1d835a on 2022-04-26; Raspberry Pi Pico with RP2040
 
-The MD5 hash of the firmware binary firmware-20210713.uf2 is:
-
-    823db2bc6fef1082ef0cd8d3cf81f4c0
-
-The source code for the CANPico support is supplied as a patch to v1.15. To apply and build the firmware
-from source do the following:
-
-0. Start from the v1.15 patch baseline
---------------------------------------
-
-This is in OLD/v1.15.patch
+The source code for the CANPico support is supplied as source to drop over the v1.18 release. To build the firmware:
 
 1. Get the MicroPython source
 -----------------------------
 
 $ git clone http://github.com/micropython/micropython.git
 $ cd micropython
-$ git checkout v1.16
+$ git checkout v1.18
 $ git submodule update --init
 
 2. Add MIN
 ----------
 
 $ cd lib
-$ git clone https://github.com/min-protocol/min.git
+$ git submodule add https://github.com/min-protocol/min.git
 
 3. Build mpy-cross
 ------------------
@@ -46,10 +36,19 @@ $ make
 $ cd ../ports/rp2/
 $ make
 
-5. Apply the patch
-------------------
+5. Apply the new code
+---------------------
 
-$ git apply canis/v1.16.patch
+Copy the subfolder 'canis' into ports/rp2
+
+Copy the following six files into ports/rp2 over the top of the v1.18 files:
+
+    CMakeLists.txt
+    machine_pin.c
+    modrp2.c
+    mpconfigport.h
+    tusb_config.h
+    tusb_port.c
 
 6. Re-build the firmware with CANPico support
 ---------------------------------------------
