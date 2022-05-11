@@ -1,3 +1,20 @@
+Release 2022-05-11 of the CANPico firmware
+==========================================
+This is the same as the 2022-04-26 firmware except it has the Python module mincan baked in (the MicroPython firmware build process allows
+Python modules to be pre-parsed and included into the firmware without needing the source code on the internal file system). The mincan
+module implements a monitor process for communication with a host over MIN and provides certain functions to the host:
+
+- Uploading the serial number of the Pico to the host
+- Upload to the host the CAN frames received, CAN frame transmit events and CAN error events
+- Sending on CAN frames produced by the host
+- Setting the trigger pin TG to fire when certain CAN frames or errors are seen
+
+The monitor is used by the new CANPicoCtrl graphical tool to drive the CANPico interactively from a host PC. The monitor is run as follows:
+
+    from mincan import *
+    CANMonitor().run()
+    
+
 Release 2022-04-26 of the CANPico firmware
 ==========================================
 
