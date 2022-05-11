@@ -14,6 +14,10 @@ The monitor is used by the new CANPicoCtrl graphical tool to drive the CANPico i
     from mincan import *
     CANMonitor().run()
     
+The pre-built firmware (firmware-20220426.uf2) reports this when REPL starts:
+
+    MicroPython v1.18-194-ge3eae236b on 2022-05-11; Raspberry Pi Pico with RP2040
+
 
 Release 2022-04-26 of the CANPico firmware
 ==========================================
