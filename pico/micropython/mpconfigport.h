@@ -194,6 +194,7 @@ extern const struct _mp_obj_type_t rp2_can_type;
     void *rp2_pio_irq_obj[2]; \
     struct _rp2_can_obj_t *rp2_can_obj; \
     struct _rp2_min_obj_t *rp2_min_obj; \
+    struct _rp2_hsm_obj_t *rp2_hsm_obj; \
     void *rp2_state_machine_irq_obj[8]; \
     void *rp2_uart_rx_buffer[2]; \
     void *rp2_uart_tx_buffer[2]; \
@@ -202,7 +203,7 @@ extern const struct _mp_obj_type_t rp2_can_type;
     MICROPY_BOARD_ROOT_POINTERS \
     MICROPY_PORT_ROOT_POINTER_NINAW10 \
     MICROPY_PORT_ROOT_POINTER_BLUETOOTH \
-        MICROPY_PORT_ROOT_POINTER_BLUETOOTH_NIMBLE \
+    MICROPY_PORT_ROOT_POINTER_BLUETOOTH_NIMBLE \
 
 #define MP_STATE_PORT MP_STATE_VM
 

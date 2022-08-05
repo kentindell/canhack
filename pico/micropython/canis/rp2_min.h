@@ -22,8 +22,6 @@
 void min_init(void);
 void min_deinit(void);
 
-extern const mp_obj_type_t pyb_min_type;
-
 #define CDC_BUF_SIZE                (512U)
 
 extern const mp_obj_type_t rp2_min_type;

@@ -24,8 +24,17 @@
  * THE SOFTWARE.
  */
 
+#ifdef CAN
 #include <canis/rp2_can.h>
-#include <ports/rp2/canis/rp2_min.h>
+#endif
+
+#ifdef CRYPTOCAN
+#include <canis/rp2_hsm.h>
+#include <canis/rp2_cryptocan.h>
+#endif
+
+#include <canis/rp2_min.h>
+
 #include "py/runtime.h"
 #include "drivers/dht/dht.h"
 #include "modrp2.h"
@@ -37,13 +46,20 @@ STATIC const mp_rom_map_elem_t rp2_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_StateMachine),        MP_ROM_PTR(&rp2_state_machine_type) },
 
     { MP_ROM_QSTR(MP_QSTR_dht_readinto),        MP_ROM_PTR(&dht_readinto_obj) },
+    #ifdef CAN
     { MP_ROM_QSTR(MP_QSTR_CANHack),             MP_ROM_PTR(&rp2_canhack_type) },
     { MP_ROM_QSTR(MP_QSTR_CAN),                 MP_ROM_PTR(&rp2_can_type) },
     { MP_ROM_QSTR(MP_QSTR_CANID),               MP_ROM_PTR(&rp2_canid_type) },
     { MP_ROM_QSTR(MP_QSTR_CANFrame),            MP_ROM_PTR(&rp2_canframe_type) },
     { MP_ROM_QSTR(MP_QSTR_CANIDFilter),         MP_ROM_PTR(&rp2_canidfilter_type) },
     { MP_ROM_QSTR(MP_QSTR_CANError),            MP_ROM_PTR(&rp2_canerror_type) },
+    { MP_ROM_QSTR(MP_QSTR_CANOverflow),         MP_ROM_PTR(&rp2_canoverflow_type) },
+    #endif
     { MP_ROM_QSTR(MP_QSTR_MIN),                 MP_ROM_PTR(&rp2_min_type) },
+    #ifdef CRYPTOCAN
+    { MP_ROM_QSTR(MP_QSTR_CryptoCAN),           MP_ROM_PTR(&rp2_cryptocan_type) },
+    { MP_ROM_QSTR(MP_QSTR_HSM),                 MP_ROM_PTR(&rp2_hsm_type) },
+    #endif
 };
 STATIC MP_DEFINE_CONST_DICT(rp2_module_globals, rp2_module_globals_table);
 

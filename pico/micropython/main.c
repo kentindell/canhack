@@ -48,8 +48,16 @@
 #include "pico/binary_info.h"
 #include "hardware/rtc.h"
 
+#ifdef CAN
 #include "canis/rp2_can.h"
-#include "ports/rp2/canis/rp2_min.h"
+#endif
+
+#include "canis/rp2_min.h"
+
+#ifdef CRYPTOCAN
+#include "canis/rp2_hsm.h"
+#endif
+
 #include "hardware/structs/rosc.h"
 
 extern uint8_t __StackTop, __StackBottom;
@@ -65,10 +73,6 @@ bi_decl(bi_program_feature_group_with_flags(BINARY_INFO_TAG_MICROPYTHON,
     BI_NAMED_GROUP_SEPARATE_COMMAS | BI_NAMED_GROUP_SORT_ALPHA));
 
 int main(int argc, char **argv) {
-    // TODO make these conditionally compiled in with PicoCAN support if this port is pushed upstream
-    can_init();
-    min_init();
-
     #if MICROPY_HW_ENABLE_UART_REPL
     bi_decl(bi_program_feature("UART REPL"))
     setup_default_uart();
@@ -121,6 +125,14 @@ int main(int argc, char **argv) {
         #if MICROPY_PY_NETWORK
         mod_network_init();
         #endif
+        #ifdef CAN
+        can_init();
+        #endif
+        // TODO make MIN conditionally included        
+        min_init();
+        #ifdef CRYPTOCAN
+        hsm_init();
+        #endif
 
         // Execute _boot.py to set up the filesystem.
         pyexec_frozen_module("_boot.py");
@@ -159,8 +171,14 @@ int main(int argc, char **argv) {
         mp_bluetooth_deinit();
         #endif
         machine_pin_deinit();
+        #ifdef CAN
         can_deinit();
+        #endif
+        // TODO make MIN conditionally included
         min_deinit();
+        #ifdef CRYPTOCAN
+        hsm_deinit();
+        #endif
         gc_sweep_all();
         mp_deinit();
     }

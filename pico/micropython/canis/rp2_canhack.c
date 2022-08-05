@@ -75,11 +75,18 @@ typedef struct _canhack_rp2_obj_t {
 
 // Construct a CAN hack object.
 //
-// The physical pins of the CAN bus is:
+// For the CANHack and CANPico boards, the physical pins of the CAN transceiver are:
 //
 //  RP2040 GP22 = CAN TX = Pico pin 29
 //  RP2040 GP21 = CAN RX = Pico pin 27
 //
+// For the CHV DEFCON30 badge, the physical pins of the CAN transceiver are:
+//
+// RP4040 GP17 = CAN TX = Pico pin 22
+// RP2040 GP16 = CAN RX = Pico pin 21
+//
+// Select -DCHV_DEFCON30_BADGE to build for the CHV badge
+
 // These ports need to be initialized as outputs.
 //
 // The timer being used will be the 16-bit free-running counter of PWM 7 (see RP2040 Datasheet section 4.4),

@@ -22,17 +22,21 @@
 void rp2_buf_get_for_send(mp_obj_t o, mp_buffer_info_t *bufinfo, byte *tmp_data);
 uint32_t copy_mp_bytes(mp_obj_t *mp_bytes, uint8_t *dest, uint32_t max_len);
 mp_obj_t make_mp_bytes(const uint8_t *src, uint32_t len);
+uint8_t *ptr_mp_bytes(mp_obj_t *mp_bytes, uint32_t *len);
 
 // Writes a word to a big-endian buffer
+#ifndef BIG_ENDIAND_BUF
 #define BIG_ENDIAN_BUF(buf, word)           ((buf)[0] = (uint8_t)(((word) >> 24) & 0xffU),  \
                                              (buf)[1] = (uint8_t)(((word) >> 16) & 0xffU),  \
                                              (buf)[2] = (uint8_t)(((word) >> 8) & 0xffU),   \
                                              (buf)[3] = (uint8_t)((word) & 0xffU))
+#endif
 
 // Extracts a word from a big-endian buffer
+#ifndef BIG_ENDIAN_WORD
 #define BIG_ENDIAN_WORD(buf)                ((((uint32_t)(buf)[0]) << 24) |  \
                                              (((uint32_t)(buf)[1]) << 16) |  \
                                              (((uint32_t)(buf)[2]) << 8) |  \
                                              ((uint32_t)(buf)[3]))
-
+#endif
 #endif //FIRMWARE_COMMON_H

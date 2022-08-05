@@ -109,10 +109,11 @@ STATIC const machine_pin_obj_t machine_pin_obj[NUM_BANK0_GPIOS] = {
     {{&machine_pin_type}, 29},
 };
 
-
 #include <inttypes.h>
 
-#include "canis/rp2_mcp251718fd.h"
+#ifdef CAN
+#include "canapi.h"
+#endif
 
 // Mask with "1" indicating that the corresponding pin is in simulated open-drain mode.
 uint32_t machine_pin_open_drain_mask;
@@ -121,30 +122,37 @@ uint32_t machine_pin_open_drain_mask;
 // in MicroPython after the fast GPIO ISR has run.
 #define IO_IRQ_HANDOFF  (31U)
 
-// Mask to see if the MCP2518 has interrupted
-#define SPI_IRQ_LEVEL_MASK          1U << (4U * (SPI_IRQ_GPIO % 8U))
+#ifdef CAN
+// Mask to see if the MCP2517FD has interrupted
+#define SPI_IRQ_LEVEL_MASK          (1U << (4U * (SPI_IRQ % 8U)))
+#endif
 
-STATIC  TIME_CRITICAL void gpio_irq(void) {
+#ifndef TIME_CRITICAL
+#define TIME_CRITICAL                       __attribute__((noinline, long_call, section(".time_critical")))
+#endif
+
+STATIC TIME_CRITICAL void gpio_irq(void) {
+#ifdef CAN
     // If the CAN subsystem has been initialized
-    if (MP_STATE_PORT(rp2_can_obj) != NULL && (iobank0_hw->intr[SPI_IRQ_GPIO / 8] & SPI_IRQ_LEVEL_MASK)) {
+    if (MP_STATE_PORT(rp2_can_obj) != NULL && (iobank0_hw->intr[SPI_IRQ / 8] & SPI_IRQ_LEVEL_MASK)) {
         // CANPico board has a level sensitive IRQ
         //
         // The core that is interrupted is programmed when the interrupt is enabled, and is set to the core
         // that made the CAN() constructor call. The event for this interrupt and the core is fixed so there is no
-        // need to do any checking, and instead if the SPI_IRQ_GPIO pin has caused the IRQ then it is handled
+        // need to do any checking, and instead if the SPI_IRQ pin has caused the IRQ then it is handled
         // by this core.
-        mcp251718fd_irq_handler();
+        mcp2517fd_irq_handler();
     }
 
     // This GPIO vector is shared, and needs to be of high priority to service the MCP2518. But
     // accessing the rest of the MicroPython code could touch flash and run very slowly. So
-    // either go straight to the MCP2518 drivers or raise a deferred ISR on a vector lower
+    // either go straight to the MCP2517FD drivers or raise a deferred ISR on a vector lower
     // priority (equal to the other ISRs). Can make an unused IRQ pending and direct that to
     // the MicroPython GPIO vector handler.
     //
     // Hand off everything else to the MicroPython handler at lower priority; this requires that
     // the IRQ is acknowledged here.
-
+#endif
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
     // Scan through the interrupt handlers to see if any of them have occurred

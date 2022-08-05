@@ -55,8 +55,48 @@ include(${MICROPY_DIR}/py/usermod.cmake)
 
 add_executable(${MICROPY_TARGET})
 
+if(CAN OR CRYPTOCAN)
+    set(CANDRIVERS_PATH ${MICROPY_PORT_DIR}/canis/candrivers)
+    set(CANDRIVERS_SOURCE_LIB
+        ${CANDRIVERS_PATH}/mcp2517fd/mcp2517fd.c
+    )
+endif()
+
+if(CRYPTOCAN)
+    set(CRYPTOCAN_PATH ${MICROPY_DIR}/lib/cryptocan/src)
+    set(CC_HSM_PATH ${CRYPTOCAN_PATH}/hsm)
+    set(CC_CRYPTOCAN_PATH ${CRYPTOCAN_PATH}/cryptocan)
+endif()
+
 set(MICROPY_QSTRDEFS_PORT
     ${PROJECT_SOURCE_DIR}/qstrdefsport.h
+)
+
+set(HSM_SOURCE_LIB
+    ${CC_HSM_PATH}/swshe/cmac.c
+    ${CC_HSM_PATH}/swshe/cmacdyn.c
+    ${CC_HSM_PATH}/swshe/dececb.c
+    ${CC_HSM_PATH}/swshe/encecb.c
+    ${CC_HSM_PATH}/swshe/exportramkey.c
+    ${CC_HSM_PATH}/swshe/extseed.c
+    ${CC_HSM_PATH}/swshe/getid.c
+    ${CC_HSM_PATH}/swshe/init.c
+    ${CC_HSM_PATH}/swshe/kdf.c
+    ${CC_HSM_PATH}/swshe/loadkey.c
+    ${CC_HSM_PATH}/swshe/platform.c
+    ${CC_HSM_PATH}/swshe/reset.c
+    ${CC_HSM_PATH}/swshe/rng.c
+    ${CC_HSM_PATH}/swshe/swshe.h
+)
+
+set(CRYPTOCAN_SOURCE_LIB
+    ${CC_CRYPTOCAN_PATH}/init.c
+    ${CC_CRYPTOCAN_PATH}/tx.c
+    ${CC_CRYPTOCAN_PATH}/rx.c
+)
+
+set(MIN_SOURCE_LIB
+    ${MICROPY_DIR}/lib/min/target/min.c
 )
 
 set(MICROPY_SOURCE_LIB
@@ -75,7 +115,6 @@ set(MICROPY_SOURCE_LIB
     ${MICROPY_DIR}/shared/runtime/stdout_helpers.c
     ${MICROPY_DIR}/shared/runtime/sys_stdio_mphal.c
     ${MICROPY_DIR}/shared/timeutils/timeutils.c
-    ${MICROPY_DIR}/lib/min/target/min.c
 )
 
 set(MICROPY_SOURCE_DRIVERS
@@ -107,10 +146,9 @@ set(MICROPY_SOURCE_PORT
     tusb_port.c
     uart.c
     canis/common.c
-    canis/canhack.c
-    canis/rp2_canhack.c
-    canis/rp2_can.c
     canis/rp2_min.c
+# TODO add Bullseye CCover support for code coverage measurement
+#   /opt/BullseyeCoverage/run/libcov-memoryDump.c
 )
 
 set(MICROPY_SOURCE_QSTR
@@ -134,9 +172,7 @@ set(MICROPY_SOURCE_QSTR
     ${PROJECT_SOURCE_DIR}/modutime.c
     ${PROJECT_SOURCE_DIR}/rp2_flash.c
     ${PROJECT_SOURCE_DIR}/rp2_pio.c
-    ${PROJECT_SOURCE_DIR}/canis/rp2_canhack.c
-    ${PROJECT_SOURCE_DIR}/canis/rp2_can.c
-    ${PROJECT_SOURCE_DIR}/canis/rp2_min.c
+    ${PROJECT_SOURCE_DIR}/canis/rp2_min.c  # TODO make this conditionally included
 )
 
 set(PICO_SDK_COMPONENTS
@@ -172,6 +208,32 @@ set(PICO_SDK_COMPONENTS
     tinyusb_common
     tinyusb_device
 )
+
+if(CAN OR CRYPTOCAN)
+    list(APPEND MICROPY_SOURCE_PORT
+        ${PROJECT_SOURCE_DIR}/canis/canhack.c
+        ${PROJECT_SOURCE_DIR}/canis/rp2_canhack.c
+        ${PROJECT_SOURCE_DIR}/canis/rp2_can.c
+        ${CANDRIVERS_SOURCE_LIB}
+    )
+    list(APPEND MICROPY_SOURCE_QSTR
+        ${PROJECT_SOURCE_DIR}/canis/rp2_canhack.c
+        ${PROJECT_SOURCE_DIR}/canis/rp2_can.c
+    )
+endif()
+
+if(CRYPTOCAN)
+    list(APPEND MICROPY_SOURCE_PORT
+        ${HSM_SOURCE_LIB}
+        ${CRYPTOCAN_SOURCE_LIB}
+        ${PROJECT_SOURCE_DIR}/canis/rp2_hsm.c
+        ${PROJECT_SOURCE_DIR}/canis/rp2_cryptocan.c
+    )
+    list(APPEND MICROPY_SOURCE_QSTR
+        ${PROJECT_SOURCE_DIR}/canis/rp2_hsm.c
+        ${PROJECT_SOURCE_DIR}/canis/rp2_cryptocan.c
+    )
+endif()
 
 if(MICROPY_PY_BLUETOOTH)
     list(APPEND MICROPY_SOURCE_PORT mpbthciport.c)
@@ -237,12 +299,15 @@ target_sources(${MICROPY_TARGET} PRIVATE
     ${MICROPY_SOURCE_LIB}
     ${MICROPY_SOURCE_DRIVERS}
     ${MICROPY_SOURCE_PORT}
+    ${MIN_SOURCE_LIB}
 )
 
 target_link_libraries(${MICROPY_TARGET} usermod)
 
 target_include_directories(${MICROPY_TARGET} PRIVATE
     ${PICO_TINYUSB_PATH}/src
+    ${CRYPTOCAN_PATH}
+    ${CANDRIVERS_PATH}
     ${MICROPY_INC_CORE}
     ${MICROPY_INC_USERMOD}
     ${MICROPY_BOARD_DIR}
@@ -282,6 +347,40 @@ target_compile_definitions(${MICROPY_TARGET} PRIVATE
     PICO_NO_BI_STDIO_UART=1 # we call it UART REPL
     PICO_RP2040_USB_DEVICE_ENUMERATION_FIX=1
 )
+
+# Definitions for various targets
+if (CRYPTOCAN)
+    target_compile_definitions(${MICROPY_TARGET} PRIVATE
+        CAN=1
+        CRYPTOCAN=1
+        SM_CPU_LITTLE_ENDIAN=1
+        SM_RAM_TABLES=1
+        SM_KEY_EXPANSION_CACHED=1
+        SM_CODE_IN_RAM=1
+    )
+endif()
+if (CAN OR CRYPTOCAN)
+    target_compile_definitions(${MICROPY_TARGET} PRIVATE
+        CAN=1
+        MCP2517FD=1
+        HOST_CANPICO=1
+    )
+endif()
+if (CHV_DEFCON30_BADGE)
+    target_compile_definitions(${MICROPY_TARGET} PRIVATE
+        CHV_DEFCON30_BADGE=1
+    )
+endif()
+if (CANPICO)
+    target_compile_definitions(${MICROPY_TARGET} PRIVATE
+        CANPICO=1
+    )
+endif()
+if (CANHACK)
+    target_compile_definitions(${MICROPY_TARGET} PRIVATE
+        CANHACK=1
+    )
+endif()
 
 target_link_libraries(${MICROPY_TARGET}
     ${PICO_SDK_COMPONENTS}

@@ -36,11 +36,19 @@
 // The Pi Pico RP2040 has a timer, but it is clocked at 1us, which is too coarse a timer
 // for CANHack. Instead, a PWM is used.
 
+#if defined(CANPICO) || defined(CANHACK)
 #define     CAN_TX_PIN                      (22U)
 #define     CAN_RX_PIN                      (21U)
 #define     DEBUG_PIN                       (2U)
-#define     CANHACK_PWM                     (7U)
+#elif defined(CHV_DEFCON30_BADGE)
+#define     CAN_TX_PIN                      (17U)
+#define     CAN_RX_PIN                      (16U)
+#define     DEBUG_PIN                       (14U)       // CAN active
+#else
+#error "One of CANPICO, CANHACK or CHV_DEFCON30_BADGE must be defined!"
+#endif
 
+#define     CANHACK_PWM                     (7U)
 #define     BIT_TIME                        (249U)
 #define     BAUD_500KBIT_PRESCALE           (1U)
 #define     BAUD_250KBIT_PRESCALE           (2U)

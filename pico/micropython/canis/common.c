@@ -29,11 +29,24 @@ void rp2_buf_get_for_send(mp_obj_t o, mp_buffer_info_t *bufinfo, byte *tmp_data)
     }
 }
 
+uint8_t *ptr_mp_bytes(mp_obj_t *mp_bytes, uint32_t *len) {
+    if (mp_bytes == MP_OBJ_NULL || !MP_OBJ_IS_STR_OR_BYTES(mp_bytes)) {
+        nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_TypeError, "Bytes parameter expected"));
+    }
+
+    mp_buffer_info_t bufinfo;
+    uint8_t data[1];
+    rp2_buf_get_for_send(mp_bytes, &bufinfo, data);
+
+    *len = bufinfo.len;
+    return bufinfo.buf;
+}
+
 // Simple worker function to take a bytes object and copy its contents to a buffer (checking for a max).
 // Returns the number of bytes copied.
 uint32_t copy_mp_bytes(mp_obj_t *mp_bytes, uint8_t *dest, uint32_t max_len)
 {
-    if(!MP_OBJ_IS_STR_OR_BYTES(mp_bytes)) {
+    if (mp_bytes == MP_OBJ_NULL || !MP_OBJ_IS_STR_OR_BYTES(mp_bytes)) {
         nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_TypeError, "Bytes parameter expected"));
     }
 
