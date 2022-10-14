@@ -1,3 +1,9 @@
+
++--------------------------------------------------------------------------------------------------------------------+
+| Note: Canis Labs has released CANPico firmware containing additional Python APIs to the CryptoCAN messaging scheme |
+| and a software-emulated hardware security module (HSM). This can be downloaded from canislabs.com/cryptocan.       |
++--------------------------------------------------------------------------------------------------------------------+
+
 Release 2022-08-01 of the CANPico firmware
 ==========================================
 
