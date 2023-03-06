@@ -1,6 +1,18 @@
 ## Welcome to the Yes We CAN repository
 
-This repository contains tools and resources for the <b>Yes We CAN</b> project of [Canis Labs](https://canislabs.com),
+This repository contains tools and resources for the <b>Yes We CAN</b> project of [Canis Labs](https://canislabs.com). There are several projects included in this repository:
+
+- CANHack toolkit (a proof-of-concept CAN protocol hacking library)
+- CANPico support (an add-on hardware board for the Raspberry Pi Pico with CAN support)
+- CAN SDK for C
+- Sigrok CAN protocol decoder (allowing PulseView to decode CAN frames and indicate exceptional protocol events)
+- A Python tool for creating CAN frame bit sequences
+
+Canis Labs CTO Dr. Ken Tindell writes about CAN on his blog at: https://kentindell.github.io
+
+## CAN SDK for C (with drivers for the MCP25xxFD)
+
+The CANPico hardware uses the Microchip MCP25xxFD CAN controller (the first revision used the MCP2518FD and the MCP2517FD, the second revision uses the MCP251863 combined controller/transceiver). Drivers for this were included directly in the MicroPython firmware for the CANPico, but have now been carved out into a separate repository as a stand-alone SDK for C. These are available from here: https://github.com/kentindell/canis-can-sdk
 
 ## CANHack toolkit
 
@@ -44,12 +56,14 @@ a [CANHack toolkit demo video](https://youtu.be/dATyoWOlEJU) that goes into deta
 use the toolkit from Python, the CAN protocol hacks it
 includes, and demonstrates it attacking CAN frames in real hardware (the video uses the STM32-based PyBoard but the current MicroPython SDK now runs on the Raspberry Pi Pico).
 
-## Tools
+## Python CAN tool
 
 Python tool for creating and parsing a CAN bitstreams (including creating Janus attack frames):
 
     src/
         canframe.py
+
+## Sigrok CAN protocol decoder
 
 A [Sigrok](https://sigrok.org) protocol decoder for CAN 2.0:
 
@@ -60,6 +74,8 @@ A [Sigrok](https://sigrok.org) protocol decoder for CAN 2.0:
 
 There is a [PulseView and can2 demo video](https://youtu.be/RvExJSDvhKo) showing how to use PulseView
 as a logic analyzer and seeing CAN frames at a low-level.
+
+The [CIA CAN newsletter](https://https://can-newsletter.org) has published an [article](https://can-newsletter.org/tools/tools-miscellaneous/210607_can-decoder-warns-for-malicious-attacks_cnlm_ken-tindell) describing the protocol decoder and showing how it can spot some CAN protocol attacks.
 
 ## Canis Labs CANPico support
 
