@@ -29,7 +29,7 @@ It has been built into MicroPython firmware for the RP2040 microcontroller on th
 and will run on the following boards:
 
 - Canis Labs CANHack board
-- Canis Labs CANPico board (see )
+- Canis Labs [CANPico board](https://canislabs.com/canpico/)
 - Car Hacking Village DEF CON 30 badge
 
 The firmware binary for MicroPython for the CANHack and CANPico boards are located in:
