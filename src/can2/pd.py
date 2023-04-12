@@ -19,6 +19,8 @@
 import struct
 import string
 from collections import OrderedDict, namedtuple
+from statistics import median
+from typing import Tuple
 import sigrokdecode as srd
 
 
@@ -365,6 +367,7 @@ class CANField:
         cls.bus_integration_count = 0
         cls.stuffing = False
         cls.last_6_str = ''
+        cls.recessive_count = 0
 
     @classmethod
     def sof(cls):
@@ -412,6 +415,11 @@ class CANField:
         cls.last_6_str = cls.last_6_str[-5:] + canbit.value
         # Add to the current field; may have to remove this bit later
         cls.add_bit(canbit=canbit)
+
+        if canbit.value == '1':
+            cls.recessive_count += 1
+        else:
+            cls.recessive_count = 0
 
         if cls.stuffing:
             if cls.last_6_str == '111111' or cls.last_6_str == '000000':
@@ -627,7 +635,7 @@ class Decoder(srd.Decoder):
     optional_channels = ()
     options = (
         {'id': 'can-bitrate', 'desc': 'CAN bit rate (Hz)', 'default': 500000},
-        {'id': 'can-samplepoint', 'desc': 'Sample point (%)', 'default': 75},
+        {'id': 'can-samplepoint', 'desc': 'Sample point (%)', 'default': 87.5},
         {'id': 'can-datadisplay', 'desc': 'Data display', 'default': 'Hex', 'values': ('Hex', 'Hex and ASCII')},
     )
     binary = (
@@ -650,6 +658,8 @@ class Decoder(srd.Decoder):
         Annotation('ack', 'ACK'),
         Annotation('ack-delimiter', 'ACK delimiter'),
         Annotation('can-warning', 'Warning'),
+        Annotation('can-delta', 'Pulse timing'),
+        Annotation('can-frame-delta', 'Frame timing'),
         Annotation('can-info', 'Info'),
         Annotation('overload', 'Overload flag'),
         Annotation('bus-integration', 'Bus integration'),
@@ -688,7 +698,9 @@ class Decoder(srd.Decoder):
                                                                     'ifs',
                                                                     'idle'])),
         ('row-can-payload', "Payload", Annotation.get_annotation_row(['can-id', 'data'])),
-        ('row-can-warning', "Info", Annotation.get_annotation_row(['can-warning', 'can-info'])),
+        ('row-can-warning', "Info", Annotation.get_annotation_row(['can-warning', 'can-info']))
+        ('row-can-delta', "Pulse", Annotation.get_annotation_row(['can-delta', 'can-delta']))
+        ('row-can-frame-delta', "Timing", Annotation.get_annotation_row(['can-frame-delta', 'can-frame-delta']))
     )
 
     def __init__(self, **kwargs):
@@ -702,6 +714,11 @@ class Decoder(srd.Decoder):
         self.out_ann = None
         self.out_binary = None
         self.printables = set(string.printable)
+        self.last_rising_edge_ns = None  # type: float
+        self.last_falling_edge_ns = None  # type: float
+        self.last_recessive_pulse_width_ns = None  # type: float
+        self.last_dominant_pulse_width_ns = None  # type: float
+        self.shortenings_ns = []  # List of nanosecond shortenings for the current frame
 
     def metadata(self, key, value):
         if key == srd.SRD_CONF_SAMPLERATE:
@@ -713,6 +730,9 @@ class Decoder(srd.Decoder):
 
     def num_samples_to_time_ns(self, numsamples: int) -> float:
         return self.sample_period_ns * numsamples
+    
+    def now_ns(self) -> float:
+        return self.num_samples_to_time_ns(self.samplenum)
 
     def reset(self):
         # TODO This is called when the Run button is hit, so is a good place to send a command over MIN to set an advanced trigger
@@ -736,6 +756,28 @@ class Decoder(srd.Decoder):
                                          falling_edge=falling_edge,
                                          canrx=canrx,
                                          canbit=canbit)
+
+        if field is not None and field.name in ['dlc']:
+            # Use the DLC field to reset the pulse width measurements
+            self.last_rising_edge_ns = None
+            self.last_falling_edge_ns = None
+            self.last_dominant_pulse_width_ns = None
+            self.last_recessive_pulse_width_ns = None
+            self.shortenings_ns = []
+
+        if field is not None and field.name in ['data', 'crc']:
+            # Keep track of pulses entirely within the part of the frame transmitted by the node
+            # Error frames in the middle of this sequence will throw the data off: it's only valid the frame is received OK
+            # TODO output the data for a frame only in the "received OK" event handler
+            if rising_edge:
+                self.last_rising_edge_ns = self.now_ns()
+                if self.last_falling_edge_ns is not None:
+                    self.last_dominant_pulse_width_ns = self.last_rising_edge_ns - self.last_falling_edge_ns
+            if falling_edge:
+                self.last_falling_edge_ns = self.now_ns()
+                if self.last_rising_edge_ns is not None:
+                    self.last_recessive_pulse_width_ns = self.last_falling_edge_ns - self.last_rising_edge_ns
+
         if end_of_canbit:
             # Finish the old bit, start the new bit
             canbit.end_samplenum = self.samplenum
@@ -743,16 +785,35 @@ class Decoder(srd.Decoder):
             # At this point the CAN bit will have been identified as a stuff bit or not
             self.put_can_bit(canbit=canbit)
 
-            # If a CAN frame has been received OK then can output it to the pcapng binary out
+            # If a CAN frame has been received OK then can output frame-related data
             if CANField.rx_ok:
+                # Output the frame to tp pcapng
                 self.put_pcapng_epb(canbit=canbit)
+
+                # Output the median pulse shortenings for the whole frame alond with its ID into a separate information field
+                median_shortening_ns = median(self.shortenings_ns)
+                can_id, extended = self.get_arbitration_id()
+                can_id_str = f'0x{can_id:08x}E' if extended else f'{can_id:03x}S'
+                CANField.info.append(CANField.Info('can-frame-delta', canbit, [f'{can_id_str}/{median_shortening_ns}ns'], ))
+
                 CANField.rx_ok = False
+
             if field is not None and field.name == 'superposition':
                 self.put_pcapng_epb(canbit=canbit, error_frame=True)
 
+                # Want to note pulse durations for recessive pulses within the frame when the measurement is good
+                if falling_edge and self.last_recessive_pulse_width_ns is not None and self.last_dominant_pulse_width_ns is not None and field is not None and field.name in ['data', 'crc']:
+                    # Recessive pulse from non-arbitration fields
+                    # TODO parameterize the duration of the dominant and recessive pulses for which measurements will be taken
+                    # Create a record indicating the shortening from an expected duration based on the number of CAN bits
+                    expected_duration_ns = CANField.recessive_count * self.can_bit_time_ns
+                    shortening_ns = int(expected_duration_ns - self.last_recessive_pulse_width_ns)
+                    self.shortenings_ns.append(shortening_ns)
+                    # Display rounded to nearest nanosecond
+                    CANField.info.append(CANField.Info('can-delta', canbit, [f'{shortening_ns}ns'], ))
+
             # Work out what to display. If the current field is ID A, then the previous field is SOF
-            # and the
-            # IFS, in which case display it then reset the fields (except for the current SOF)
+            # and the IFS, in which case display it then reset the fields (except for the current SOF)
             # The previous field may be idle, but we do not display idle or bus integration.
             if field is not None:
                 # Display the previous field
@@ -811,7 +872,7 @@ class Decoder(srd.Decoder):
             data = [Annotation.lookup('stuffbit'), ["Stuff bit={}".format(canbit.value), canbit.value, '']]
         else:
             data = [Annotation.lookup('bit'), [canbit.value, '']]
-        self.put(canbit.start_samplenum, canbit.end_samplenum, self.out_ann, data)
+        self.put(canbit.start_samplenum, canbit.end_samplenum, self.out_ann, data)        
 
     def put_can_payloads(self):
         for i in range(len(CANField.data_bytes)):
@@ -851,14 +912,23 @@ class Decoder(srd.Decoder):
                                                 ""]]
         self.put(CANField.data_bytes[0].canbits[0].start_samplenum, CANField.data_bytes[-1].canbits[-1].end_samplenum, self.out_ann, data)
 
-    def put_can_id(self):
+    def get_arbitration_id(self) -> Tuple[int, bool]:
         ide = CANField.fields['ide']  # type: CANField
         ida = CANField.fields['ida']  # type: CANField
-        id_start_samplenum = ida.canbits[0].start_samplenum
-        if ide.get_value() == 1:
+        extended = True if ide.get_value() == 1 else False
+        if extended:
             idb = CANField.fields['idb']  # type: CANField
+            arbitration_id = ida << 18 | idb
+        else:
+            arbitration_id = ida
+        
+        return arbitration_id, extended
+
+    def put_can_id(self):
+        can_id, extended = self.get_arbitration_id()
+        id_start_samplenum = ida.canbits[0].start_samplenum
+        if extended:
             id_end_samplenum = idb.canbits[-1].end_samplenum
-            can_id = ida.get_value() << 18 | idb.get_value()
             can_id_strs = ["ID=0x{:08x} (Extended)".format(can_id),
                            "ID=0x{:08x} (Ext)".format(can_id),
                            "ID=0x{:08x}E".format(can_id),
@@ -869,7 +939,6 @@ class Decoder(srd.Decoder):
                            ""]
         else:
             id_end_samplenum = ida.canbits[-1].end_samplenum
-            can_id = ida.get_value()
             can_id_strs = ["ID=0x{:03x} (Standard)".format(can_id),
                            "ID=0x{:03x} (Std)".format(can_id),
                            "ID=0x{:03x}".format(can_id),
