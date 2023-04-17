@@ -1,7 +1,7 @@
 ##
 ## This file is part of the libsigrokdecode project.
 ##
-## Copyright (C) 2020 Canis Automotive Labs <info@canislabs.com>
+## Copyright (C) 2020-2023 Canis Automotive Labs <info@canislabs.com>
 ##
 ## This program is free software; you can redistribute it and/or modify
 ## it under the terms of the GNU General Public License as published by
@@ -16,11 +16,12 @@
 ## You should have received a copy of the GNU General Public License
 ## along with this program; if not, see <http://www.gnu.org/licenses/>.
 ##
+from copy import copy
+import json
+from statistics import mean, median
 import struct
 import string
 from collections import OrderedDict, namedtuple
-from statistics import median
-from typing import Tuple
 import sigrokdecode as srd
 
 
@@ -246,6 +247,7 @@ class CANField:
     data_bytes = []  # type: List['CANField']
     info = []  # type: List[Info]
     rx_ok = False
+    recessive_count = 0
 
     def __init__(self, name: str, add_to_data=False):
         self.name = name
@@ -619,6 +621,57 @@ class Annotation:
         # return tuple(cls.annotations.items())
 
 
+class Node:
+    nodes = []
+    def __init__(self, first_ns: float, last_ns: float, name: str=None):
+        self.first_ns = first_ns
+        self.last_ns = last_ns
+        if name is None:
+            name = f"Node{len(self.nodes)}"
+        self.name = name
+
+        # Adds into nodes
+        self.nodes.append(self)
+
+    def to_dict(self):
+        return {
+            "first_ns": self.first_ns,
+            "last_ns": self.last_ns,
+            "name": self.name,
+        }
+
+    @classmethod
+    def to_json(cls):
+        data = [node.to_dict() for node in cls.nodes]
+
+        with open('can2nodes.json', 'w') as f:
+            json.dump(data, f)
+
+    @classmethod
+    def from_json(cls):
+        try:
+            # FIXME use a dot file in the home directory
+            with open('can2nodes.json', 'r') as f:
+                data = json.load(f)
+        except:
+            # Couldn't open the file
+            data = []
+
+        # Create all the nodes from the imported JSON (if the open failed then will be empty)
+        cls.nodes = []
+        for node_dict in data:
+            Node(first_ns=node_dict['first_ns'], last_ns=node_dict['last_ns'], name=node_dict['name'])
+
+    @classmethod
+    def get_node(cls, delta_ns: float):
+        # Tries to find the node, a list in which the item fits
+        nodes = []
+        for n in cls.nodes:
+            if n.first_ns <= delta_ns <= n.last_ns:
+                nodes.append(n)
+        return nodes
+ 
+
 class Decoder(srd.Decoder):
     api_version = 3
     id = 'can2'
@@ -635,7 +688,7 @@ class Decoder(srd.Decoder):
     optional_channels = ()
     options = (
         {'id': 'can-bitrate', 'desc': 'CAN bit rate (Hz)', 'default': 500000},
-        {'id': 'can-samplepoint', 'desc': 'Sample point (%)', 'default': 87.5},
+        {'id': 'can-samplepoint', 'desc': 'Sample point (%)', 'default': 75},
         {'id': 'can-datadisplay', 'desc': 'Data display', 'default': 'Hex', 'values': ('Hex', 'Hex and ASCII')},
     )
     binary = (
@@ -698,9 +751,9 @@ class Decoder(srd.Decoder):
                                                                     'ifs',
                                                                     'idle'])),
         ('row-can-payload', "Payload", Annotation.get_annotation_row(['can-id', 'data'])),
-        ('row-can-warning', "Info", Annotation.get_annotation_row(['can-warning', 'can-info']))
-        ('row-can-delta', "Pulse", Annotation.get_annotation_row(['can-delta', 'can-delta']))
-        ('row-can-frame-delta', "Timing", Annotation.get_annotation_row(['can-frame-delta', 'can-frame-delta']))
+        ('row-can-delta', "Pulse", Annotation.get_annotation_row(['can-delta', 'can-delta'])),
+        ('row-can-warning', "Info", Annotation.get_annotation_row(['can-warning', 'can-info'])),
+        ('row-can-frame-delta', "Timing", Annotation.get_annotation_row(['can-frame-delta', 'can-frame-delta'])),
     )
 
     def __init__(self, **kwargs):
@@ -720,6 +773,9 @@ class Decoder(srd.Decoder):
         self.last_dominant_pulse_width_ns = None  # type: float
         self.shortenings_ns = []  # List of nanosecond shortenings for the current frame
 
+        # Import the node descriptions (if they exist)
+        Node.from_json()
+
     def metadata(self, key, value):
         if key == srd.SRD_CONF_SAMPLERATE:
             self.sample_rate = value
@@ -730,7 +786,7 @@ class Decoder(srd.Decoder):
 
     def num_samples_to_time_ns(self, numsamples: int) -> float:
         return self.sample_period_ns * numsamples
-    
+
     def now_ns(self) -> float:
         return self.num_samples_to_time_ns(self.samplenum)
 
@@ -757,60 +813,88 @@ class Decoder(srd.Decoder):
                                          canrx=canrx,
                                          canbit=canbit)
 
-        if field is not None and field.name in ['dlc']:
-            # Use the DLC field to reset the pulse width measurements
+        cf = CANField.get_current_field()
+
+        if cf is not None and cf.name in ['r0']:
+            # Use the r0 field to reset the pulse width measurements
             self.last_rising_edge_ns = None
             self.last_falling_edge_ns = None
             self.last_dominant_pulse_width_ns = None
             self.last_recessive_pulse_width_ns = None
             self.shortenings_ns = []
 
-        if field is not None and field.name in ['data', 'crc']:
-            # Keep track of pulses entirely within the part of the frame transmitted by the node
-            # Error frames in the middle of this sequence will throw the data off: it's only valid the frame is received OK
-            # TODO output the data for a frame only in the "received OK" event handler
-            if rising_edge:
-                self.last_rising_edge_ns = self.now_ns()
-                if self.last_falling_edge_ns is not None:
-                    self.last_dominant_pulse_width_ns = self.last_rising_edge_ns - self.last_falling_edge_ns
-            if falling_edge:
-                self.last_falling_edge_ns = self.now_ns()
-                if self.last_rising_edge_ns is not None:
-                    self.last_recessive_pulse_width_ns = self.last_falling_edge_ns - self.last_rising_edge_ns
+        if rising_edge or falling_edge:
+            if cf is not None and cf.name in ['dlc', 'data', 'crc']:
+                # Keep track of pulses entirely within the part of the frame transmitted by the node
+                # Error frames in the middle of this sequence will throw the data off: it's only valid the frame is received OK
+                # TODO output the data for a frame only in the "received OK" event handler
+                if rising_edge:
+                    self.last_rising_edge_ns = self.now_ns()
+                    if self.last_falling_edge_ns is not None:
+                        self.last_dominant_pulse_width_ns = self.last_rising_edge_ns - self.last_falling_edge_ns
+                if falling_edge:
+                    self.last_falling_edge_ns = self.now_ns()
+                    if self.last_rising_edge_ns is not None:
+                        self.last_recessive_pulse_width_ns = self.last_falling_edge_ns - self.last_rising_edge_ns
 
         if end_of_canbit:
             # Finish the old bit, start the new bit
+
             canbit.end_samplenum = self.samplenum
             field = CANField.state_machine(canbit=canbit)
             # At this point the CAN bit will have been identified as a stuff bit or not
             self.put_can_bit(canbit=canbit)
 
-            # If a CAN frame has been received OK then can output frame-related data
+            # If a CAN frame has been received OK then can output it to the pcapng binary out
             if CANField.rx_ok:
-                # Output the frame to tp pcapng
                 self.put_pcapng_epb(canbit=canbit)
 
-                # Output the median pulse shortenings for the whole frame alond with its ID into a separate information field
-                median_shortening_ns = median(self.shortenings_ns)
-                can_id, extended = self.get_arbitration_id()
-                can_id_str = f'0x{can_id:08x}E' if extended else f'{can_id:03x}S'
-                CANField.info.append(CANField.Info('can-frame-delta', canbit, [f'{can_id_str}/{median_shortening_ns}ns'], ))
+                if len(self.shortenings_ns) > 2:
+                    # Output the mean pulse shortenings for the whole frame alond with its ID into a separate information field
+                    # TODO eliminate outlying results, maybe used median
+                    self.shortenings_ns.sort()
+                    # Remove first and last data points
+                    # s = s[1:]
+                    # s = s[:-1]
+                    mean_shortening_ns = mean(self.shortenings_ns)
+
+                    # Try and determine the node(s) that the frame can have come from
+                    nodes = Node.get_node(delta_ns=mean_shortening_ns)
+                    # Must be an unknown node
+                    if len(nodes) > 0:
+                        pass
+                    else:
+                        # No nodes: must be a new node, so create it
+                        nodes = [Node(first_ns = self.shortenings_ns[0], last_ns=self.shortenings_ns[-1])]
+                        # Save all the nodes into the JSON file to keep track of this one
+                        Node.to_json()
+
+                    display_str = "/".join([node.name for node in nodes])
+    
+                    sof_samplenum = CANField.fields['ida'].canbits[0].start_samplenum
+                    frame_duration = CANBit(start_samplenum=sof_samplenum)
+                    frame_duration.end_samplenum = self.samplenum
+
+                    CANField.info.append(CANField.Info('can-frame-delta', frame_duration, [f'{display_str} ({mean_shortening_ns:.1f}ns)'], ))
 
                 CANField.rx_ok = False
-
             if field is not None and field.name == 'superposition':
                 self.put_pcapng_epb(canbit=canbit, error_frame=True)
 
-                # Want to note pulse durations for recessive pulses within the frame when the measurement is good
-                if falling_edge and self.last_recessive_pulse_width_ns is not None and self.last_dominant_pulse_width_ns is not None and field is not None and field.name in ['data', 'crc']:
-                    # Recessive pulse from non-arbitration fields
-                    # TODO parameterize the duration of the dominant and recessive pulses for which measurements will be taken
-                    # Create a record indicating the shortening from an expected duration based on the number of CAN bits
-                    expected_duration_ns = CANField.recessive_count * self.can_bit_time_ns
-                    shortening_ns = int(expected_duration_ns - self.last_recessive_pulse_width_ns)
-                    self.shortenings_ns.append(shortening_ns)
-                    # Display rounded to nearest nanosecond
-                    CANField.info.append(CANField.Info('can-delta', canbit, [f'{shortening_ns}ns'], ))
+            # Want to note pulse durations for recessive pulses within the frame when the measurement is good
+            if falling_edge and self.last_recessive_pulse_width_ns is not None and self.last_dominant_pulse_width_ns is not None and cf is not None and cf.name in ['data', 'crc']:
+                # Recessive pulse from non-arbitration fields
+                # TODO parameterize the duration of the dominant and recessive pulses for which measurements will be taken
+                # Create a record indicating the shortening from an expected duration based on the number of CAN bits
+                expected_duration_ns = CANField.recessive_count * self.can_bit_time_ns
+                shortening_ns = int(expected_duration_ns - self.last_recessive_pulse_width_ns)
+
+                self.shortenings_ns.append(shortening_ns)
+                # Display rounded to nearest nanosecond
+                pulse = CANBit(start_samplenum=self.time_ns_to_num_samples(self.last_rising_edge_ns))
+                pulse.end_samplenum = self.time_ns_to_num_samples(self.last_falling_edge_ns)
+
+                CANField.info.append(CANField.Info('can-delta', pulse, [f'{shortening_ns}ns'], ))
 
             # Work out what to display. If the current field is ID A, then the previous field is SOF
             # and the IFS, in which case display it then reset the fields (except for the current SOF)
@@ -872,7 +956,7 @@ class Decoder(srd.Decoder):
             data = [Annotation.lookup('stuffbit'), ["Stuff bit={}".format(canbit.value), canbit.value, '']]
         else:
             data = [Annotation.lookup('bit'), [canbit.value, '']]
-        self.put(canbit.start_samplenum, canbit.end_samplenum, self.out_ann, data)        
+        self.put(canbit.start_samplenum, canbit.end_samplenum, self.out_ann, data)
 
     def put_can_payloads(self):
         for i in range(len(CANField.data_bytes)):
@@ -912,23 +996,14 @@ class Decoder(srd.Decoder):
                                                 ""]]
         self.put(CANField.data_bytes[0].canbits[0].start_samplenum, CANField.data_bytes[-1].canbits[-1].end_samplenum, self.out_ann, data)
 
-    def get_arbitration_id(self) -> Tuple[int, bool]:
+    def put_can_id(self):
         ide = CANField.fields['ide']  # type: CANField
         ida = CANField.fields['ida']  # type: CANField
-        extended = True if ide.get_value() == 1 else False
-        if extended:
-            idb = CANField.fields['idb']  # type: CANField
-            arbitration_id = ida << 18 | idb
-        else:
-            arbitration_id = ida
-        
-        return arbitration_id, extended
-
-    def put_can_id(self):
-        can_id, extended = self.get_arbitration_id()
         id_start_samplenum = ida.canbits[0].start_samplenum
-        if extended:
+        if ide.get_value() == 1:
+            idb = CANField.fields['idb']  # type: CANField
             id_end_samplenum = idb.canbits[-1].end_samplenum
+            can_id = ida.get_value() << 18 | idb.get_value()
             can_id_strs = ["ID=0x{:08x} (Extended)".format(can_id),
                            "ID=0x{:08x} (Ext)".format(can_id),
                            "ID=0x{:08x}E".format(can_id),
@@ -939,6 +1014,7 @@ class Decoder(srd.Decoder):
                            ""]
         else:
             id_end_samplenum = ida.canbits[-1].end_samplenum
+            can_id = ida.get_value()
             can_id_strs = ["ID=0x{:03x} (Standard)".format(can_id),
                            "ID=0x{:03x} (Std)".format(can_id),
                            "ID=0x{:03x}".format(can_id),
