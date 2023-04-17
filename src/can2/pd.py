@@ -22,6 +22,7 @@ from statistics import mean, median
 import struct
 import string
 from collections import OrderedDict, namedtuple
+from typing import List
 import sigrokdecode as srd
 
 
