@@ -16,6 +16,7 @@
 ## You should have received a copy of the GNU General Public License
 ## along with this program; if not, see <http://www.gnu.org/licenses/>.
 ##
+from binascii import hexlify
 from copy import copy
 import json
 from statistics import mean, median
@@ -383,7 +384,11 @@ class CANField:
 
     @classmethod
     def get_current_field(cls) -> 'CANField':
-        return cls.fields[next(reversed(cls.fields))]
+        if len(cls.fields) > 0:
+            return cls.fields[next(reversed(cls.fields))]
+        else:
+            cls.reset()
+            return cls.fields[0]
 
     @classmethod
     def add_bit(cls, canbit: CANBit):
@@ -895,7 +900,16 @@ class Decoder(srd.Decoder):
                 pulse = CANBit(start_samplenum=self.time_ns_to_num_samples(self.last_rising_edge_ns))
                 pulse.end_samplenum = self.time_ns_to_num_samples(self.last_falling_edge_ns)
 
-                CANField.info.append(CANField.Info('can-delta', pulse, [f'{shortening_ns}ns'], ))
+
+                # Try and determine the node(s) that the frame can have come from
+                nodes = Node.get_node(delta_ns=shortening_ns)
+                # Must be an unknown node
+                if len(nodes) > 0:
+                    nodes_str = "/".join([node.name for node in nodes])
+                else:
+                    nodes_str = "?"
+
+                CANField.info.append(CANField.Info('can-delta', pulse, [f'{nodes_str} ({shortening_ns}ns)'], ))
 
             # Work out what to display. If the current field is ID A, then the previous field is SOF
             # and the IFS, in which case display it then reset the fields (except for the current SOF)
@@ -981,14 +995,14 @@ class Decoder(srd.Decoder):
             bs.append(CANField.data_bytes[i].get_value())
         if self.display_ascii:
             cs = "'" + ''.join(chr(i) if chr(i) in self.printables else '.' for i in bs) + "'"
-            bs = bytes(bs).hex()
+            bs = hexlify(bytes(bs)).decode("ascii")  # bytes.hex() isn't available
             data = [Annotation.lookup('data'), ["DATA=0x{} {}".format(bs, cs),
                                                 "0x{} {}".format(bs, cs),
                                                 "DATA",
                                                 "D",
                                                 ""]]
         else:
-            bs = bytes(bs).hex()
+            bs = hexlify(bytes(bs)).decode("ascii")
             data = [Annotation.lookup('data'), ["DATA=0x{}".format(bs),
                                                 "0x{}".format(bs),
                                                 "{}".format(bs),
