@@ -629,6 +629,7 @@ class Annotation:
 
 class Node:
     nodes = []
+    
     def __init__(self, first_ns: float, last_ns: float, name: str=None):
         self.first_ns = first_ns
         self.last_ns = last_ns
@@ -669,13 +670,21 @@ class Node:
             Node(first_ns=node_dict['first_ns'], last_ns=node_dict['last_ns'], name=node_dict['name'])
 
     @classmethod
-    def get_node(cls, delta_ns: float):
+    def get_node(cls, delta_ns, sample_period_ns: float):
         # Tries to find the node, a list in which the item fits
         nodes = []
+
+        # Find a list of nodes into which this distortion delta fits, with the distance to the mean
         for n in cls.nodes:
-            if n.first_ns <= delta_ns <= n.last_ns:
-                nodes.append(n)
-        return nodes
+            if n.first_ns - sample_period_ns <= delta_ns <= n.last_ns + sample_period_ns:
+                mean_ns = int((n.first_ns + n.last_ns) / 2.0)
+                distance_ns = abs(n.first_ns - mean_ns)
+                nodes.append((distance_ns, n, ))
+        nodes.sort(key=lambda node: node[0])
+
+        ordered_nodes = [n[1] for n in nodes]
+
+        return ordered_nodes
  
 
 class Decoder(srd.Decoder):
@@ -696,6 +705,7 @@ class Decoder(srd.Decoder):
         {'id': 'can-bitrate', 'desc': 'CAN bit rate (Hz)', 'default': 500000},
         {'id': 'can-samplepoint', 'desc': 'Sample point (%)', 'default': 75},
         {'id': 'can-datadisplay', 'desc': 'Data display', 'default': 'Hex', 'values': ('Hex', 'Hex and ASCII')},
+        {'id': 'can-nodes-write', 'desc': 'Write nodes file', 'default': 'No', 'values': ('No', 'Yes')},
     )
     binary = (
         ('pcapng', 'The pcapng packet capture format used by Wireshark'),
@@ -800,6 +810,7 @@ class Decoder(srd.Decoder):
         # TODO This is called when the Run button is hit, so is a good place to send a command over MIN to set an advanced trigger
         self.display_hex = True
         self.display_ascii = self.options['can-datadisplay'] != 'Hex'
+        self.nodes_write = self.options['can-nodes-write'] == 'Yes'
         self.can_bit_time_ns = 1000000000 / self.options['can-bitrate']
         self.can_sample_point = self.options['can-samplepoint'] / 100
         CANField.reset()
@@ -865,15 +876,17 @@ class Decoder(srd.Decoder):
                     mean_shortening_ns = mean(self.shortenings_ns)
 
                     # Try and determine the node(s) that the frame can have come from
-                    nodes = Node.get_node(delta_ns=mean_shortening_ns)
+                    nodes = Node.get_node(delta_ns=mean_shortening_ns, sample_period_ns=self.sample_period_ns)
                     # Must be an unknown node
                     if len(nodes) > 0:
                         pass
                     else:
-                        # No nodes: must be a new node, so create it
-                        nodes = [Node(first_ns = self.shortenings_ns[0], last_ns=self.shortenings_ns[-1])]
-                        # Save all the nodes into the JSON file to keep track of this one
-                        Node.to_json()
+                        # If the option is set to write back the nodes file then do so
+                        if self.nodes_write:
+                            # No nodes: must be a new node, so create it
+                            nodes = [Node(first_ns = self.shortenings_ns[0], last_ns=self.shortenings_ns[-1])]
+                            # Save all the nodes into the JSON file to keep track of this one
+                            Node.to_json()
 
                     display_str = "/".join([node.name for node in nodes])
     
@@ -886,30 +899,6 @@ class Decoder(srd.Decoder):
                 CANField.rx_ok = False
             if field is not None and field.name == 'superposition':
                 self.put_pcapng_epb(canbit=canbit, error_frame=True)
-
-            # Want to note pulse durations for recessive pulses within the frame when the measurement is good
-            if falling_edge and self.last_recessive_pulse_width_ns is not None and self.last_dominant_pulse_width_ns is not None and cf is not None and cf.name in ['data', 'crc']:
-                # Recessive pulse from non-arbitration fields
-                # TODO parameterize the duration of the dominant and recessive pulses for which measurements will be taken
-                # Create a record indicating the shortening from an expected duration based on the number of CAN bits
-                expected_duration_ns = CANField.recessive_count * self.can_bit_time_ns
-                shortening_ns = int(expected_duration_ns - self.last_recessive_pulse_width_ns)
-
-                self.shortenings_ns.append(shortening_ns)
-                # Display rounded to nearest nanosecond
-                pulse = CANBit(start_samplenum=self.time_ns_to_num_samples(self.last_rising_edge_ns))
-                pulse.end_samplenum = self.time_ns_to_num_samples(self.last_falling_edge_ns)
-
-
-                # Try and determine the node(s) that the frame can have come from
-                nodes = Node.get_node(delta_ns=shortening_ns)
-                # Must be an unknown node
-                if len(nodes) > 0:
-                    nodes_str = "/".join([node.name for node in nodes])
-                else:
-                    nodes_str = "?"
-
-                CANField.info.append(CANField.Info('can-delta', pulse, [f'{nodes_str} ({shortening_ns}ns)'], ))
 
             # Work out what to display. If the current field is ID A, then the previous field is SOF
             # and the IFS, in which case display it then reset the fields (except for the current SOF)
@@ -940,6 +929,31 @@ class Decoder(srd.Decoder):
 
             # Move on to next bit
             canbit = CANBit(start_samplenum=self.samplenum + 1)
+
+        # Want to note pulse durations for recessive pulses within the frame when the measurement is good
+        if falling_edge and self.last_recessive_pulse_width_ns is not None and self.last_dominant_pulse_width_ns is not None and cf is not None and cf.name in ['data', 'crc']:
+            # Recessive pulse from non-arbitration fields
+            # TODO parameterize the duration of the dominant and recessive pulses for which measurements will be taken
+            # Create a record indicating the shortening from an expected duration based on the number of CAN bits
+            expected_duration_ns = CANField.recessive_count * self.can_bit_time_ns
+            shortening_ns = int(expected_duration_ns - self.last_recessive_pulse_width_ns)
+
+            self.shortenings_ns.append(shortening_ns)
+            # Display rounded to nearest nanosecond
+            pulse = CANBit(start_samplenum=self.time_ns_to_num_samples(self.last_rising_edge_ns))
+            pulse.end_samplenum = self.time_ns_to_num_samples(self.last_falling_edge_ns)
+
+            # Try and determine the node(s) that the frame can have come from
+            nodes = Node.get_node(delta_ns=shortening_ns, sample_period_ns=self.sample_period_ns)
+            # Must be an unknown node
+            if len(nodes) > 0:
+                nodes_str = "/".join([node.name for node in nodes])
+            else:
+                nodes_str = "?"
+
+            CANField.info.append(CANField.Info('can-delta', pulse, [f'{nodes_str} ({shortening_ns}ns)'], ))
+
+
         return canbit
 
     def decode(self):
@@ -954,15 +968,22 @@ class Decoder(srd.Decoder):
 
         while True:
             # Wait for a falling edge or the next can event
-            events = [{0: 'f'},
-                      {0: 'r'},
-                      {'skip': CANBit.next_event_samplenum - self.samplenum},
-                      ]
 
-            pins = self.wait(events)
-            canrx = '1' if pins[0] == 1 else '0'
-            falling_edge = self.matched[0]
-            rising_edge = self.matched[1]
+            (pin,) = self.wait([{0: 'f'}, {0: 'r'}, {'skip': CANBit.next_event_samplenum - self.samplenum}])
+
+            # events = [{0: 'f'},
+                    #   {0: 'r'},
+                     #  {'skip': CANBit.next_event_samplenum - self.samplenum},
+                    #   ]
+
+            canrx = '1' if pin == 1 else '0'
+
+            if isinstance(self.matched, int):
+                falling_edge = True if self.matched & 0x1 else False
+                rising_edge = True if self.matched & 0x2 else False
+            else:
+                falling_edge = self.matched[0]
+                rising_edge = self.matched[1]
 
             canbit = self.decode_events(canbit=canbit, falling_edge=falling_edge, rising_edge=rising_edge, canrx=canrx)
 
@@ -1009,7 +1030,8 @@ class Decoder(srd.Decoder):
                                                 "DATA",
                                                 "D",
                                                 ""]]
-        self.put(CANField.data_bytes[0].canbits[0].start_samplenum, CANField.data_bytes[-1].canbits[-1].end_samplenum, self.out_ann, data)
+        if len(CANField.data_bytes) > 0:
+            self.put(CANField.data_bytes[0].canbits[0].start_samplenum, CANField.data_bytes[-1].canbits[-1].end_samplenum, self.out_ann, data)
 
     def put_can_id(self):
         ide = CANField.fields['ide']  # type: CANField
