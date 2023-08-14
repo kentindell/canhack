@@ -308,7 +308,7 @@ class CANField:
                             "RTR",
                             "R"]
         elif self.name == 'srr':
-            if self.fields['ide'].get_value() == 0:
+            if 'ide' in self.fields and self.fields['ide'].get_value() == 0:
                 descriptions = ["RTR=Remote" if value else "RTR=Data",
                                 "RTR={}".format(value),
                                 "RTR",
