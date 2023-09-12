@@ -23,7 +23,6 @@ from statistics import mean, median
 import struct
 import string
 from collections import OrderedDict, namedtuple
-from typing import List
 import sigrokdecode as srd
 
 
@@ -634,7 +633,7 @@ class Node:
         self.first_ns = first_ns
         self.last_ns = last_ns
         if name is None:
-            name = f"Node{len(self.nodes)}"
+            name = "Node%d" % len(self.nodes)
         self.name = name
 
         # Adds into nodes
@@ -894,7 +893,7 @@ class Decoder(srd.Decoder):
                     frame_duration = CANBit(start_samplenum=sof_samplenum)
                     frame_duration.end_samplenum = self.samplenum
 
-                    CANField.info.append(CANField.Info('can-frame-delta', frame_duration, [f'{display_str} ({mean_shortening_ns:.1f}ns)'], ))
+                    CANField.info.append(CANField.Info('can-frame-delta', frame_duration, ['%s (%.1f ns)' % (display_str, mean_shortening_ns)], ))
 
                 CANField.rx_ok = False
             if field is not None and field.name == 'superposition':
@@ -951,7 +950,7 @@ class Decoder(srd.Decoder):
             else:
                 nodes_str = "?"
 
-            CANField.info.append(CANField.Info('can-delta', pulse, [f'{nodes_str} ({shortening_ns}ns)'], ))
+            CANField.info.append(CANField.Info('can-delta', pulse, ['%s (%s ns)' % (nodes_str, shortening_ns)], ))
 
 
         return canbit
