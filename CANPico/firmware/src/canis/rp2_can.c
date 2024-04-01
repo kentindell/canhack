@@ -49,6 +49,7 @@
 
 #define FRAME_FROM_BYTES_NUM                (19U)
 
+#ifdef NOTDEF
 // Only used for debugging to print from outside MicroPython firmware
 void debug_printf( const char *format, ... )
 {
@@ -59,20 +60,41 @@ void debug_printf( const char *format, ... )
     mp_printf(MP_PYTHON_PRINTER, "%s", buffer);
     va_end(args);
 }
+#endif
 
+STATIC void TIME_CRITICAL irq_handler(void)
+{
+    // Get a pointer to the CAN controller
+    rp2_can_obj_t *self = MP_STATE_PORT(rp2_can_obj[0]);
+    can_controller_t *controller = &self->controller;
+
+    // Work out if this interrupt is from the the MCP25xxFD. The bound interface
+    // defines the pin used for the interrupt line from the CAN controller.
+    uint8_t spi_irq = controller->host_interface.spi_irq;
+    uint32_t events = gpio_get_irq_event_mask(spi_irq); 
+
+    if (events & GPIO_IRQ_LEVEL_LOW) {
+        mcp25xxfd_irq_handler(controller);
+    }
+}
+
+// In the future there may be multiple CAN controllers on a CANPico board and
+// so they will all be initialized/de-initialized here.
 void can_init(void) {
     // Set up the root pointer to a null CAN controller object so that the memory is not allocate until CAN is used.
-    MP_STATE_PORT(rp2_can_obj) = NULL;
+    MP_STATE_PORT(rp2_can_obj[0]) = MP_OBJ_NULL;
 }
 
 void can_deinit(void) {
     // Called when the system is soft reset (CTRL-D in REPL).
 
     // If the controller is initialized then take it offline and deactivate it
-    if (MP_STATE_PORT(rp2_can_obj) != NULL) {
-        can_stop_controller();
+    rp2_can_obj_t *self = MP_STATE_PORT(rp2_can_obj[0]);
+    if (self != MP_OBJ_NULL) {
+        can_stop_controller(&self->controller);
+        irq_remove_handler(IO_IRQ_BANK0, irq_handler);
     }
-    MP_STATE_PORT(rp2_can_obj) = NULL;
+    MP_STATE_PORT(rp2_can_obj[0]) = MP_OBJ_NULL;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -86,7 +108,7 @@ STATIC mp_obj_t rp2_can_make_new(const mp_obj_type_t *type, mp_uint_t n_args, mp
 {
     static const mp_arg_t allowed_args[] = {
         {MP_QSTR_profile,           MP_ARG_KW_ONLY | MP_ARG_INT,    {.u_int  = 0}},
-        {MP_QSTR_id_filters,        MP_ARG_KW_ONLY | MP_ARG_OBJ,    {.u_obj = MP_OBJ_NULL}},
+        {MP_QSTR_id_filters,        MP_ARG_KW_ONLY | MP_ARG_OBJ,    {.u_obj = mp_const_none}},
         {MP_QSTR_hard_reset,        MP_ARG_KW_ONLY | MP_ARG_BOOL,   {.u_bool = false}},
         {MP_QSTR_brp,               MP_ARG_KW_ONLY | MP_ARG_INT,    {.u_int  = -1}},
         {MP_QSTR_tseg1,             MP_ARG_KW_ONLY | MP_ARG_INT,    {.u_int  = 10}},
@@ -94,9 +116,9 @@ STATIC mp_obj_t rp2_can_make_new(const mp_obj_type_t *type, mp_uint_t n_args, mp
         {MP_QSTR_sjw,               MP_ARG_KW_ONLY | MP_ARG_INT,    {.u_int  = 2}},
         {MP_QSTR_recv_errors,       MP_ARG_KW_ONLY | MP_ARG_BOOL,   {.u_bool = false}},
         {MP_QSTR_mode,              MP_ARG_KW_ONLY | MP_ARG_INT,    {.u_int = 0}},
-        {MP_QSTR_tx_open_drain,     MP_ARG_KW_ONLY | MP_ARG_BOOL,   {.u_bool = false}},
+        {MP_QSTR_tx_open_drain,     MP_ARG_KW_ONLY | MP_ARG_BOOL,   {.u_bool = true}},
         {MP_QSTR_reject_remote,     MP_ARG_KW_ONLY | MP_ARG_BOOL,   {.u_bool = false}},
-        {MP_QSTR_rx_callback_fn,    MP_ARG_KW_ONLY | MP_ARG_OBJ,    {.u_obj = MP_OBJ_NULL}}, 
+        {MP_QSTR_rx_callback_fn,    MP_ARG_KW_ONLY | MP_ARG_OBJ,    {.u_obj = mp_const_none}}, 
         {MP_QSTR_recv_overflows,    MP_ARG_KW_ONLY | MP_ARG_BOOL,   {.u_bool = false}},               
     };
 
@@ -129,11 +151,11 @@ STATIC mp_obj_t rp2_can_make_new(const mp_obj_type_t *type, mp_uint_t n_args, mp
     // 2: CAN.ACK_ONLY, does not transmit but does set ACK=0
     // 3: CAN.OFFLINE, does not send or receive
 
-    if (mp_rx_callback_fn != MP_OBJ_NULL && !MP_OBJ_IS_FUN(mp_rx_callback_fn)) {
+    if (mp_rx_callback_fn != mp_const_none && !MP_OBJ_IS_FUN(mp_rx_callback_fn)) {
         nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_TypeError, "rx_callback_fn must be a function"));
     }
 
-    if (mp_id_filters != NULL) {
+    if (mp_id_filters != mp_const_none) {
         // Check dictionary is well-formed
         if(!MP_OBJ_IS_TYPE(mp_id_filters, &mp_type_dict)) {
             nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_TypeError, "A dict expected for id_filters"));
@@ -150,21 +172,23 @@ STATIC mp_obj_t rp2_can_make_new(const mp_obj_type_t *type, mp_uint_t n_args, mp
     }
 
     // Create class instance for controller
-    rp2_can_obj_t *self = MP_STATE_PORT(rp2_can_obj);
+    rp2_can_obj_t *self = MP_STATE_PORT(rp2_can_obj[0]);
 
-    if (MP_STATE_PORT(rp2_can_obj) == NULL) {
+    if (self == MP_OBJ_NULL) {
         // Newly create object (we don't want it created always because it's a fairly large object, with
         // large receive FIFO and this shouldn't be allocated until needed).
         self = m_new_obj(rp2_can_obj_t);
         self->base.type = &rp2_can_type;
-        MP_STATE_PORT(rp2_can_obj) = self;
+        MP_STATE_PORT(rp2_can_obj[0]) = self;
+        // Bind the interrupt handler from the GPIO port
+        irq_add_shared_handler(IO_IRQ_BANK0, irq_handler, PICO_SHARED_IRQ_HANDLER_DEFAULT_ORDER_PRIORITY);
     }
 
     // Up to 32 filters can be set
     can_id_filter_t filters[CAN_MAX_ID_FILTERS];
 
     // Add in the filters
-    if (mp_id_filters != NULL) {
+    if (mp_id_filters != mp_const_none) {
         CAN_DEBUG_PRINT("Setting specific filters\n");
         for (uint32_t idx = 0; idx < CAN_MAX_ID_FILTERS; idx++) {
             mp_map_elem_t *elem = mp_map_lookup(&mp_id_filters->map, MP_OBJ_NEW_SMALL_INT(idx), MP_MAP_LOOKUP);
@@ -201,11 +225,23 @@ STATIC mp_obj_t rp2_can_make_new(const mp_obj_type_t *type, mp_uint_t n_args, mp
     }
     options |= CAN_OPTION_RECORD_TX_EVENTS;
 
+    // Bind the host interface to the CANPico's pin layout
+    mcp25xxfd_spi_bind_canpico(&self->controller.host_interface);
+    // Can now call the initialize with the interface bound
     can_errorcode_t rc = can_setup_controller(&self->controller, &bitrate, &all_filters, mode, options);
     if (rc == CAN_ERC_BAD_INIT) {
-        nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_RuntimeError, "Cannot put CAN controller into config mode"));
+        nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_RuntimeError, "Hardware error: Cannot put CAN controller into config mode"));
     }
-
+    if (rc == CAN_ERC_NO_INTERFACE) {
+        nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_RuntimeError, "No SPI interface bound to controller"));
+    }
+    if (rc == CAN_ERC_BAD_WRITE) {
+        // For the MCP25xxFD this is returned when the transmit open drain bit is not set after being requested
+        nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_RuntimeError, "Failed to set tx_open_drain"));
+    }
+    if (rc != CAN_ERC_NO_ERROR) {
+        nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_RuntimeError, "Unknown error code: %d", rc));
+    }
     // Set the callback function that will be called with a received frame
     self->mp_rx_callback_fn = mp_rx_callback_fn;
 
@@ -215,12 +251,13 @@ STATIC mp_obj_t rp2_can_make_new(const mp_obj_type_t *type, mp_uint_t n_args, mp
 STATIC mp_obj_t rp2_can_send_frame(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args)
 {
     static const mp_arg_t allowed_args[] = {
-        {MP_QSTR_frame,    MP_ARG_REQUIRED | MP_ARG_OBJ, {.u_obj = MP_OBJ_NULL}},
+        {MP_QSTR_frame,    MP_ARG_REQUIRED | MP_ARG_OBJ, {.u_obj = mp_const_none}},
         {MP_QSTR_fifo,     MP_ARG_KW_ONLY | MP_ARG_BOOL, {.u_bool = false}},
     };
 
-    // Not used
-    // rp2_can_obj_t *self = pos_args[0];
+    rp2_can_obj_t *self = pos_args[0];
+    can_controller_t *controller = &self->controller;
+
     mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
     mp_arg_parse_all(n_args - 1, pos_args + 1, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
 
@@ -232,7 +269,7 @@ STATIC mp_obj_t rp2_can_send_frame(mp_uint_t n_args, const mp_obj_t *pos_args, m
     }
 
     // C API call
-    can_errorcode_t rc = can_send_frame(&mp_frame->frame, fifo);
+    can_errorcode_t rc = can_send_frame(controller, &mp_frame->frame, fifo);
 
     if (rc == CAN_ERC_NO_ROOM_FIFO) {
         nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_ValueError, "No room in FIFO queue"));
@@ -250,12 +287,12 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_KW(rp2_can_send_frame_obj, 1, rp2_can_send_frame)
 STATIC mp_obj_t rp2_can_send_frames(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args)
 {
     static const mp_arg_t allowed_args[] = {
-        {MP_QSTR_frames,   MP_ARG_REQUIRED | MP_ARG_OBJ, {.u_obj = MP_OBJ_NULL}},
+        {MP_QSTR_frames,   MP_ARG_REQUIRED | MP_ARG_OBJ, {.u_obj = mp_const_none}},
         {MP_QSTR_fifo,     MP_ARG_KW_ONLY | MP_ARG_BOOL, {.u_bool = false}},
     };
 
-    // Not used
-    // rp2_can_obj_t *self = pos_args[0];
+    rp2_can_obj_t *self = pos_args[0];
+    can_controller_t *controller = &self->controller;
     mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
     mp_arg_parse_all(n_args - 1, pos_args + 1, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
 
@@ -273,10 +310,10 @@ STATIC mp_obj_t rp2_can_send_frames(mp_uint_t n_args, const mp_obj_t *pos_args, 
         }
     }
 
-    if (can_is_space(frames->len, fifo)) {
+    if (can_is_space(controller, frames->len, fifo)) {
         for (uint32_t i = 0; i < frames->len; i++) {
             rp2_canframe_obj_t *mp_frame = frames->items[i];
-            can_send_frame(&mp_frame->frame, fifo);
+            can_send_frame(controller, &mp_frame->frame, fifo);
         }
     }
     else {
@@ -294,8 +331,8 @@ STATIC mp_obj_t rp2_can_recv(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_
         {MP_QSTR_as_bytes,      MP_ARG_KW_ONLY | MP_ARG_BOOL, {.u_bool = false}},
     };
 
-    // Not used
-    // rp2_can_obj_t *self = pos_args[0];
+    rp2_can_obj_t *self = pos_args[0];
+    can_controller_t *controller = &self->controller;
     mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
     mp_arg_parse_all(n_args - 1, pos_args + 1, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
 
@@ -304,9 +341,21 @@ STATIC mp_obj_t rp2_can_recv(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_
     uint32_t limit = args[0].u_int;
     bool as_bytes = args[1].u_bool;
 
-    uint32_t num_events = can_recv_pending();
+    uint32_t num_events = can_recv_pending(controller);
     if (limit > num_events) {
         limit = num_events;
+    }
+
+    // If the queue is empty then return a result that does not use the heap: otherwise spinning
+    // on recv() will invoke the garbage collector.
+
+    if (num_events == 0) {
+        if (as_bytes) {
+            return mp_const_empty_bytes;
+        }
+        else {
+            return mp_const_empty_tuple;
+        }
     }
 
     if (as_bytes) {
@@ -319,7 +368,7 @@ STATIC mp_obj_t rp2_can_recv(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_
         // Pull frames from the FIFO up to a limit, keeping track of the bytes added so that if
         // there aren't enough bytes then that's the number returned
         for (uint32_t i = 0; i < limit; i++) {
-            size_t added = can_recv_as_bytes(buf + n, remaining);
+            size_t added = can_recv_as_bytes(controller, buf + n, remaining);
             if (added > 0) {
                 n += added;
                 remaining -= added;
@@ -334,13 +383,14 @@ STATIC mp_obj_t rp2_can_recv(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_
     else {
         // Frames that will be pulled are the minimum of the limit or the number of frames in the RX FIFO
         // Will return an empty list if there are no frames
+
         mp_obj_list_t *list = mp_obj_new_list(limit, NULL);
 
         // Pull frames from the FIFO up to a limit
         for (uint32_t i = 0; i < limit; i++) {
             can_rx_event_t event;
             can_rx_event_t *ev = &event;
-            if (can_recv(ev)) {
+            if (can_recv(controller, ev)) {
                 if (can_event_is_frame(ev)) {
                     rp2_canframe_obj_t *mp_frame = m_new_obj(rp2_canframe_obj_t);
                     mp_frame->base.type = &rp2_canframe_type;
@@ -393,10 +443,10 @@ long cov_memoryAreaSize = 4096;
 // Return number of messages waiting in the RX FIFO.`
 STATIC mp_obj_t rp2_can_recv_pending(mp_obj_t self_in)
 {
-    // Not used
-    // rp2_can_obj_t *self = self_in;
+    rp2_can_obj_t *self = self_in;
+    can_controller_t *controller = &self->controller;
 
-    return MP_OBJ_NEW_SMALL_INT(can_recv_pending());
+    return MP_OBJ_NEW_SMALL_INT(can_recv_pending(controller));
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_1(rp2_can_recv_pending_obj, rp2_can_recv_pending);
 
@@ -407,15 +457,15 @@ STATIC mp_obj_t rp2_can_recv_tx_events(mp_uint_t n_args, const mp_obj_t *pos_arg
             {MP_QSTR_as_bytes, MP_ARG_KW_ONLY | MP_ARG_BOOL, {.u_bool = false}},
     };
 
-    // Not used
-    // rp2_can_obj_t *self = pos_args[0];
+    rp2_can_obj_t *self = pos_args[0];
+    can_controller_t *controller = &self->controller;
     mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
     mp_arg_parse_all(n_args - 1, pos_args + 1, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
 
     uint32_t limit = args[0].u_int;
     bool as_bytes = args[1].u_bool;
 
-    uint32_t num_events = can_recv_tx_events_pending();
+    uint32_t num_events = can_recv_tx_events_pending(controller);
 
     if (limit > num_events) {
         limit = num_events;
@@ -428,7 +478,7 @@ STATIC mp_obj_t rp2_can_recv_tx_events(mp_uint_t n_args, const mp_obj_t *pos_arg
 
         // Pull events from the FIFO up to a limit
         for (uint32_t i = 0; i < limit; i++) {
-            size_t added = can_recv_tx_event_as_bytes(buf + n, remaining);
+            size_t added = can_recv_tx_event_as_bytes(controller, buf + n, remaining);
             if (added) {
                 n += added;
                 remaining -= added;
@@ -450,7 +500,7 @@ STATIC mp_obj_t rp2_can_recv_tx_events(mp_uint_t n_args, const mp_obj_t *pos_arg
             can_tx_event_t event;
             can_tx_event_t *e = &event;
             
-            bool recvd = can_recv_tx_event(e);
+            bool recvd = can_recv_tx_event(controller, e);
             if (recvd) {
                 if (can_tx_event_is_frame(e)) {
                     // Return a reference to the instance of the transmitted frame (that should not have been garbage collected
@@ -483,19 +533,19 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_KW(rp2_can_recv_tx_events_obj, 1, rp2_can_recv_tx
 // Return number of events waiting in the TX event FIFO.`
 STATIC mp_obj_t rp2_can_recv_tx_events_pending(mp_obj_t self_in)
 {
-    // Not used
-    // rp2_can_obj_t *self = self_in;
+    rp2_can_obj_t *self = self_in;
+    can_controller_t *controller = &self->controller;
 
-    return MP_OBJ_NEW_SMALL_INT(can_recv_tx_events_pending());
+    return MP_OBJ_NEW_SMALL_INT(can_recv_tx_events_pending(controller));
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_1(rp2_can_recv_tx_events_pending_obj, rp2_can_recv_tx_events_pending);
 
 // Return number of messages waiting in the RX FIFO.
 STATIC mp_obj_t rp2_can_get_status(mp_obj_t self_in)
 {
-    // Not used
-    // rp2_can_obj_t *self = self_in;
-    can_status_t status = can_get_status();
+    rp2_can_obj_t *self = self_in;
+    can_controller_t *controller = &self->controller;
+    can_status_t status = can_get_status(controller);
 
     // Returns a tuple of:
     // bool: is Bus-off
@@ -516,19 +566,25 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_1(rp2_can_get_status_obj, rp2_can_get_status);
 STATIC mp_obj_t rp2_can_get_diagnostics(mp_obj_t self_in)
 {
     rp2_can_obj_t *self = self_in;
+    can_controller_t *controller = &self->controller;
+
     // Returns a tuple of:
     //
     // integer: number of times SEQ was corrupted
     // integer: number of times TXQUA was read as corrupted
     // integer: number of times TXQSTA was read as corrupted
+    // integer: number of times Bus Off happened
+    // integer: number of times a spurious interrupt happened
+    // integer: number of times an SPI read had a bad CRC
     //
-    // This is target-specific MCP2517FD code
-    //
-    // Other data may be added here to help diagnose faults
-    mp_obj_tuple_t *tuple = mp_obj_new_tuple(3U, NULL);
-    tuple->items[0] = MP_OBJ_NEW_SMALL_INT(self->controller.target_specific.seq_bad);
-    tuple->items[1] = MP_OBJ_NEW_SMALL_INT(self->controller.target_specific.txqua_bad);
-    tuple->items[2] = MP_OBJ_NEW_SMALL_INT(self->controller.target_specific.txqsta_bad);
+    // This is target-specific MCP25xxFD code
+    mp_obj_tuple_t *tuple = mp_obj_new_tuple(6U, NULL);
+    tuple->items[0] = MP_OBJ_NEW_SMALL_INT(controller->target_specific.seq_bad);
+    tuple->items[1] = MP_OBJ_NEW_SMALL_INT(controller->target_specific.txqua_bad);
+    tuple->items[2] = MP_OBJ_NEW_SMALL_INT(controller->target_specific.txqsta_bad);
+    tuple->items[3] = MP_OBJ_NEW_SMALL_INT(controller->target_specific.bus_off);
+    tuple->items[4] = MP_OBJ_NEW_SMALL_INT(controller->target_specific.spurious);
+    tuple->items[5] = MP_OBJ_NEW_SMALL_INT(controller->target_specific.crc_bad);
 
     return tuple;
 }
@@ -537,10 +593,10 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_1(rp2_can_get_diagnostics_obj, rp2_can_get_diagno
 // Return the timestamp counter (Typically used to convert timestamps to time-of-day)
 STATIC mp_obj_t rp2_can_get_time(mp_obj_t self_in)
 {
-    // Not used
-    // rp2_can_obj_t *self = self_in;
+    rp2_can_obj_t *self = self_in;
+    can_controller_t *controller = &self->controller;
 
-    return mp_obj_new_int_from_uint(can_get_time());
+    return mp_obj_new_int_from_uint(can_get_time(controller));
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_1(rp2_can_get_time_obj, rp2_can_get_time);
 
@@ -549,7 +605,8 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_1(rp2_can_get_time_obj, rp2_can_get_time);
 STATIC mp_obj_t rp2_can_get_time_hz(mp_obj_t self_in)
 {
     // Not used
-    // rp2_can_obj_t *self = self_in;
+    // rp2_can_obj_t *self = pos_args[0];
+    // can_controller_t *controller = &self->controller;
 
     return mp_obj_new_int_from_uint(1000000U);
 }
@@ -562,15 +619,15 @@ STATIC mp_obj_t rp2_can_get_send_space(mp_uint_t n_args, const mp_obj_t *pos_arg
         {MP_QSTR_fifo,    MP_ARG_KW_ONLY | MP_ARG_BOOL, {.u_bool = false}},
     };
 
-    // Not used
-    // rp2_can_obj_t *self = pos_args[0];
+    rp2_can_obj_t *self = pos_args[0];
+    can_controller_t *controller = &self->controller;
 
     mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
     mp_arg_parse_all(n_args - 1, pos_args + 1, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
 
     bool fifo = args[0].u_bool;
 
-    return MP_OBJ_NEW_SMALL_INT(can_get_send_space(fifo));
+    return MP_OBJ_NEW_SMALL_INT(can_get_send_space(controller, fifo));
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_KW(rp2_can_get_send_space_obj, 1, rp2_can_get_send_space);
 
@@ -579,8 +636,8 @@ STATIC mp_obj_t rp2_can_set_trigger(mp_uint_t n_args, const mp_obj_t *pos_args, 
 {
     static const mp_arg_t allowed_args[] = {
             {MP_QSTR_on_error,      MP_ARG_KW_ONLY | MP_ARG_BOOL, {.u_bool = false}},
-            {MP_QSTR_on_canid,      MP_ARG_KW_ONLY | MP_ARG_OBJ, {.u_obj = MP_OBJ_NULL}},   // A specific CAN ID
-            {MP_QSTR_as_bytes,      MP_ARG_KW_ONLY | MP_ARG_OBJ, {.u_obj = MP_OBJ_NULL}},   // A block of bytes
+            {MP_QSTR_on_canid,      MP_ARG_KW_ONLY | MP_ARG_OBJ, {.u_obj = mp_const_none}},   // A specific CAN ID
+            {MP_QSTR_as_bytes,      MP_ARG_KW_ONLY | MP_ARG_OBJ, {.u_obj = mp_const_none}},   // A block of bytes
             {MP_QSTR_on_tx,         MP_ARG_KW_ONLY | MP_ARG_BOOL, {.u_bool = false}},
             {MP_QSTR_on_rx,         MP_ARG_KW_ONLY | MP_ARG_BOOL, {.u_bool = true}},
     };
@@ -595,12 +652,12 @@ STATIC mp_obj_t rp2_can_set_trigger(mp_uint_t n_args, const mp_obj_t *pos_args, 
     bool on_tx = args[3].u_bool;
     bool on_rx = args[4].u_bool;
 
-    if (as_bytes != MP_OBJ_NULL) {
+    if (as_bytes != mp_const_none) {
         // Trigger can be set directly but the ID trigger is then not valid
         if (!MP_OBJ_IS_STR_OR_BYTES(as_bytes)) {
             nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_TypeError, "Trigger must be bytes"));
         }
-        if (mp_on_canid != MP_OBJ_NULL) {
+        if (mp_on_canid != mp_const_none) {
             nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_ValueError, "Cannot set a binary trigger and an ID trigger"));
         }
 
@@ -638,11 +695,11 @@ STATIC mp_obj_t rp2_can_set_trigger(mp_uint_t n_args, const mp_obj_t *pos_args, 
         self->triggers[0].ide_match = ide_match;
         self->triggers[0].enabled = true;
     }
-    else if (mp_on_canid != MP_OBJ_NULL) {
+    else if (mp_on_canid != mp_const_none) {
         if (!MP_OBJ_IS_TYPE(mp_on_canid, &rp2_canid_type)) {
             nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_TypeError, "on_canid must be of type CANID"));
         }
-        if (as_bytes != MP_OBJ_NULL) {
+        if (as_bytes != mp_const_none) {
             nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_ValueError, "Cannot set an ID trigger and a binary trigger"));
         }
         // Set masks to allow all data and sizes
@@ -665,6 +722,13 @@ STATIC mp_obj_t rp2_can_set_trigger(mp_uint_t n_args, const mp_obj_t *pos_args, 
         self->triggers[0].enabled = true;
     }
     
+    // Set the trigger pin on the CANPico as a GPIO port, drive low
+    gpio_set_function(TRIG_GPIO, GPIO_FUNC_SIO);
+    // Set direction: out
+    gpio_set_dir(TRIG_GPIO, GPIO_OUT);
+    // Drive to 0
+    gpio_clr_mask(1U << TRIG_GPIO);
+
     return mp_const_none;
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_KW(rp2_can_set_trigger_obj, 1, rp2_can_set_trigger);
@@ -725,7 +789,10 @@ STATIC MP_DEFINE_CONST_STATICMETHOD_OBJ(rp2_can_test_irq_init_obj, MP_ROM_PTR(&r
 
 STATIC mp_obj_t rp2_can_test_irq_enable(void)
 {
-    mcp2517fd_spi_gpio_enable_irq();
+    can_interface_t canpico_spi;
+    mcp25xxfd_spi_bind_canpico(&canpico_spi);
+
+    mcp25xxfd_spi_gpio_enable_irq(&canpico_spi);
     CAN_DEBUG_PRINT("DISABLE_GPIO_INTERRUPTS() called\n");
     return mp_const_none;
 }
@@ -734,18 +801,31 @@ STATIC MP_DEFINE_CONST_STATICMETHOD_OBJ(rp2_can_test_irq_enable_obj, MP_ROM_PTR(
 
 STATIC mp_obj_t rp2_can_test_irq_disable(void)
 {
-    mcp2517fd_spi_gpio_disable_irq();
+    can_interface_t canpico_spi;
+    mcp25xxfd_spi_bind_canpico(&canpico_spi);
+
+    mcp25xxfd_spi_gpio_disable_irq(&canpico_spi);
     CAN_DEBUG_PRINT("ENABLE_GPIO_INTERRUPTS() called\n");
     return mp_const_none;
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_0(rp2_can_test_irq_disable_fun_obj, rp2_can_test_irq_disable);
 STATIC MP_DEFINE_CONST_STATICMETHOD_OBJ(rp2_can_test_irq_disable_obj, MP_ROM_PTR(&rp2_can_test_irq_disable_fun_obj));
 
+// FIXME remove when done
+
+int can_debug_print(char *desc, uint32_t n)
+{
+    return mp_printf(MP_PYTHON_PRINTER, "%s=0x%08"PRIx32"\n", desc, n);
+}
+
 STATIC mp_obj_t rp2_can_test_spi_init(void)
 {
-    mcp2517fd_spi_gpio_disable_irq();
-    mcp2517fd_spi_pins_init();
-    mcp2517fd_spi_gpio_enable_irq();
+    can_interface_t canpico_spi;
+    mcp25xxfd_spi_bind_canpico(&canpico_spi);
+
+    mcp25xxfd_spi_gpio_disable_irq(&canpico_spi);
+    mcp25xxfd_spi_pins_init(&canpico_spi);
+    mcp25xxfd_spi_gpio_enable_irq(&canpico_spi);
     CAN_DEBUG_PRINT("VTOR=0x%08"PRIx32"\n", scb_hw->vtor);
     for(int i = -16; i < 0x40; i++) {
         CAN_DEBUG_PRINT("VTOR[%d]=0x%08"PRIx32"\n", i, ((uint32_t *)(scb_hw->vtor))[i + 16]);
@@ -757,7 +837,10 @@ STATIC MP_DEFINE_CONST_STATICMETHOD_OBJ(rp2_can_test_spi_init_obj, MP_ROM_PTR(&r
 
 STATIC mp_obj_t rp2_can_test_spi_set(void)
 {
-    mcp2517fd_spi_select();
+    can_interface_t canpico_spi;
+    mcp25xxfd_spi_bind_canpico(&canpico_spi);
+
+    mcp25xxfd_spi_select(&canpico_spi);
     return mp_const_none;
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_0(rp2_can_test_spi_set_fun_obj, rp2_can_test_spi_set);
@@ -765,7 +848,10 @@ STATIC MP_DEFINE_CONST_STATICMETHOD_OBJ(rp2_can_test_spi_set_obj, MP_ROM_PTR(&rp
 
 STATIC mp_obj_t rp2_can_test_spi_deselect(void)
 {
-    mcp2517fd_spi_deselect();
+    can_interface_t canpico_spi;
+    mcp25xxfd_spi_bind_canpico(&canpico_spi);
+
+    mcp25xxfd_spi_deselect(&canpico_spi);
     return mp_const_none;
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_0(rp2_can_test_spi_deselect_fun_obj, rp2_can_test_spi_deselect);
@@ -773,13 +859,16 @@ STATIC MP_DEFINE_CONST_STATICMETHOD_OBJ(rp2_can_test_spi_deselect_obj, MP_ROM_PT
 
 STATIC mp_obj_t rp2_can_test_spi_write_word(mp_obj_t addr_obj, mp_obj_t word_obj)
 {
+    can_interface_t canpico_spi;
+    mcp25xxfd_spi_bind_canpico(&canpico_spi);
+
     uint32_t addr = mp_obj_get_int(addr_obj);
     uint32_t word = mp_obj_get_int(word_obj);
 
     CAN_DEBUG_PRINT("Writing word=0x%08"PRIx32"\n", word);
-    mcp2517fd_spi_gpio_disable_irq();
+    mcp25xxfd_spi_gpio_disable_irq(&canpico_spi);
     uint8_t buf[6];
-    // MCP2517/18FD SPI transaction = command/addr, 4 bytes
+    // MCP25xxFD SPI transaction = command/addr, 4 bytes
     buf[0] = 0x20 | ((addr >> 8U) & 0xfU);
     buf[1] = addr & 0xffU;
     buf[2] = word & 0xffU;
@@ -790,10 +879,10 @@ STATIC mp_obj_t rp2_can_test_spi_write_word(mp_obj_t addr_obj, mp_obj_t word_obj
     // SPI transaction
     // The Pico is little-endian so the first byte sent is the lowest-address, which is the
     // same as the RP2040
-    mcp2517fd_spi_select();
-    mcp2517fd_spi_write(buf, sizeof(buf));
-    mcp2517fd_spi_deselect();
-    mcp2517fd_spi_gpio_enable_irq();
+    mcp25xxfd_spi_select(&canpico_spi);
+    mcp25xxfd_spi_write(&canpico_spi, buf, sizeof(buf));
+    mcp25xxfd_spi_deselect(&canpico_spi);
+    mcp25xxfd_spi_gpio_enable_irq(&canpico_spi);
 
     return mp_const_none;
 }
@@ -802,9 +891,12 @@ STATIC MP_DEFINE_CONST_STATICMETHOD_OBJ(rp2_can_test_spi_write_word_obj, MP_ROM_
 
 STATIC mp_obj_t rp2_can_test_spi_read_word(mp_obj_t addr_obj)
 {
+    can_interface_t canpico_spi;
+    mcp25xxfd_spi_bind_canpico(&canpico_spi);
+
     uint32_t addr = mp_obj_get_int(addr_obj);
 
-    mcp2517fd_spi_gpio_disable_irq();
+    mcp25xxfd_spi_gpio_disable_irq(&canpico_spi);
     uint8_t cmd[6];
     uint8_t resp[6];
 
@@ -817,12 +909,12 @@ STATIC mp_obj_t rp2_can_test_spi_read_word(mp_obj_t addr_obj)
     cmd[5] = 0xefU;
 
     // SPI transaction
-    mcp2517fd_spi_select();
-    mcp2517fd_spi_read_write(cmd, resp, sizeof(cmd));
-    mcp2517fd_spi_deselect();
+    mcp25xxfd_spi_select(&canpico_spi);
+    mcp25xxfd_spi_read_write(&canpico_spi, cmd, resp, sizeof(cmd));
+    mcp25xxfd_spi_deselect(&canpico_spi);
 
     uint32_t word = ((uint32_t)resp[2]) | ((uint32_t)resp[3] << 8) | ((uint32_t)resp[4] << 16) | ((uint32_t)resp[5] << 24);
-    mcp2517fd_spi_gpio_enable_irq();
+    mcp25xxfd_spi_gpio_enable_irq(&canpico_spi);
 
     CAN_DEBUG_PRINT("Read word=0x%08"PRIx32"\n", word);
     return mp_obj_new_int_from_ull(word);
@@ -832,24 +924,27 @@ STATIC MP_DEFINE_CONST_STATICMETHOD_OBJ(rp2_can_test_spi_read_word_obj, MP_ROM_P
 
 STATIC mp_obj_t rp2_can_test_spi_read_words(mp_obj_t addr_obj)
 {
+    can_interface_t canpico_spi;
+    mcp25xxfd_spi_bind_canpico(&canpico_spi);
+
     uint32_t words[4];
     uint32_t addr = mp_obj_get_int(addr_obj);
 
     uint8_t buf[2];
 
-    // MCP2517FD SPI transaction = command/addr, 4 bytes
+    // MCP25xxFD SPI transaction = command/addr, 4 bytes
     buf[0] = 0x30 | ((addr >> 8U) & 0xfU);
     buf[1] = addr & 0xffU;
 
-    mcp2517fd_spi_gpio_disable_irq();
+    mcp25xxfd_spi_gpio_disable_irq(&canpico_spi);
     // SPI transaction
-    mcp2517fd_spi_select();
+    mcp25xxfd_spi_select(&canpico_spi);
     // Send command, which flushes the pipeline then resumes
-    mcp2517fd_spi_write(buf, 2U);
+    mcp25xxfd_spi_write(&canpico_spi, buf, 2U);
     // Bulk data
-    mcp2517fd_spi_read((uint8_t *)(words), 16U);
-    mcp2517fd_spi_deselect();
-    mcp2517fd_spi_gpio_enable_irq();
+    mcp25xxfd_spi_read(&canpico_spi, (uint8_t *)(words), 16U);
+    mcp25xxfd_spi_deselect(&canpico_spi);
+    mcp25xxfd_spi_gpio_enable_irq(&canpico_spi);
 
     mp_obj_tuple_t *tuple = mp_obj_new_tuple(4U, NULL);
     tuple->items[0] = mp_obj_new_int_from_ull(words[0]);
@@ -864,13 +959,16 @@ STATIC MP_DEFINE_CONST_STATICMETHOD_OBJ(rp2_can_test_spi_read_words_obj, MP_ROM_
 
 STATIC mp_obj_t rp2_can_test_spi_write_words(mp_obj_t addr_obj)
 {
+    can_interface_t canpico_spi;
+    mcp25xxfd_spi_bind_canpico(&canpico_spi);
+
     uint32_t addr = mp_obj_get_int(addr_obj);
     uint32_t words[4] = {0xdeadbeefU, 0xcafef00dU, 0x01e551caU, 0x01020304U};
 
     // Prepare a contiguous buffer for the command because the SPI hardware is pipelined and do not want to stop
     // to switch buffers
     uint8_t cmd[18];
-    // MCP2517/18FD SPI transaction = command/addr, 4 bytes
+    // MCP25xxFD SPI transaction = command/addr, 4 bytes
     cmd[0] = 0x20 | ((addr >> 8U) & 0xfU);
     cmd[1] = addr & 0xffU;
 
@@ -883,9 +981,9 @@ STATIC mp_obj_t rp2_can_test_spi_write_words(mp_obj_t addr_obj)
     }
 
     // SPI transaction
-    mcp2517fd_spi_select();
-    mcp2517fd_spi_write(cmd, sizeof(cmd));
-    mcp2517fd_spi_deselect();
+    mcp25xxfd_spi_select(&canpico_spi);
+    mcp25xxfd_spi_write(&canpico_spi, cmd, sizeof(cmd));
+    mcp25xxfd_spi_deselect(&canpico_spi);
 
     return mp_const_none;
 }
@@ -896,9 +994,10 @@ STATIC MP_DEFINE_CONST_STATICMETHOD_OBJ(rp2_can_test_spi_write_words_obj, MP_ROM
 STATIC void rp2_can_print(const mp_print_t *print, mp_obj_t self_in, mp_print_kind_t kind)
 {
      rp2_can_obj_t *self = self_in;
+     can_controller_t *controller = &self->controller;
 
-    can_status_t status = can_get_status();
-    uint32_t timestamp_timer = can_get_time();
+    can_status_t status = can_get_status(controller);
+    uint32_t timestamp_timer = can_get_time(controller);
 
     // Show the bus off status, the error passive status, TEC, REC, the time, and the baud rate settings
     mp_printf(print, "CAN(mode=");
@@ -1010,24 +1109,26 @@ STATIC const mp_map_elem_t rp2_can_locals_dict_table[] = {
 };
 STATIC MP_DEFINE_CONST_DICT(rp2_can_locals_dict, rp2_can_locals_dict_table);
 
-const mp_obj_type_t rp2_can_type = {
-    { &mp_type_type },
-    .name = MP_QSTR_CAN,
-    .print = rp2_can_print,
-    .make_new = rp2_can_make_new,
-    .locals_dict = (mp_obj_t)&rp2_can_locals_dict,
-};
+MP_DEFINE_CONST_OBJ_TYPE(
+    rp2_can_type,
+    MP_QSTR_CAN,
+    MP_TYPE_FLAG_NONE,
+    make_new, rp2_can_make_new,
+    print, rp2_can_print,
+    locals_dict, &rp2_can_locals_dict
+    );
+
 ////////////////////////////////////// End of CAN class //////////////////////////////////////
 
 ////////////////////////////////// Start of CANFrame class ///////////////////////////////////
 STATIC mp_obj_t rp2_canframe_make_new(const mp_obj_type_t *type, mp_uint_t n_args, mp_uint_t n_kw, const mp_obj_t *all_args)
 {
     static const mp_arg_t allowed_args[] = {
-        {MP_QSTR_canid,     MP_ARG_REQUIRED | MP_ARG_OBJ, {.u_obj = MP_OBJ_NULL}},
-        {MP_QSTR_data,      MP_ARG_KW_ONLY | MP_ARG_OBJ, {.u_obj = MP_OBJ_NULL}},
+        {MP_QSTR_canid,     MP_ARG_REQUIRED | MP_ARG_OBJ, {.u_obj = mp_const_none}},
+        {MP_QSTR_data,      MP_ARG_OBJ,                   {.u_obj = mp_const_none}},
         {MP_QSTR_remote,    MP_ARG_KW_ONLY | MP_ARG_BOOL, {.u_bool = false}},
-        {MP_QSTR_tag,       MP_ARG_KW_ONLY | MP_ARG_INT, {.u_int = 0}},
-        {MP_QSTR_dlc,       MP_ARG_KW_ONLY | MP_ARG_INT, {.u_int = -1}},
+        {MP_QSTR_tag,       MP_ARG_KW_ONLY | MP_ARG_INT,  {.u_int = 0}},
+        {MP_QSTR_dlc,       MP_ARG_KW_ONLY | MP_ARG_INT,  {.u_int = -1}},
     };
 
     mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
@@ -1046,13 +1147,13 @@ STATIC mp_obj_t rp2_canframe_make_new(const mp_obj_type_t *type, mp_uint_t n_arg
     if (dlc_set && dlc > 15) {
         nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_TypeError, "dlc must be 0..15"));
     }
-    if (dlc_set && !remote && mp_data == MP_OBJ_NULL && dlc > 0) {
+    if (dlc_set && !remote && mp_data == mp_const_none && dlc > 0) {
         nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_TypeError, "dlc must be 0 if no data"));
     }
 
     uint8_t frame_dlc;
     uint32_t data_buf[2];
-    if(mp_data == MP_OBJ_NULL) {
+    if(mp_data == mp_const_none) {
         if (remote) {
             frame_dlc = dlc_set ? dlc : 0;
         }
@@ -1110,7 +1211,7 @@ STATIC mp_obj_t rp2_canframe_from_bytes(mp_obj_t frames)
         can_make_frame_from_bytes(&self->frame, buf_ptr);
         // Take the tag out of uref and store it in the CANFrame instance
         self->tag = (uint32_t)(can_frame_get_uref(&self->frame).ref); 
-        // Set the uref to point to the CANFrame instance          
+        // Set the uref to point to the CANFrame instance
         can_frame_set_uref(&self->frame, self);
         
         self->timestamp_valid = false;
@@ -1122,6 +1223,24 @@ STATIC mp_obj_t rp2_canframe_from_bytes(mp_obj_t frames)
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_1(rp2_canframe_from_bytes_fun_obj, rp2_canframe_from_bytes);
 STATIC MP_DEFINE_CONST_STATICMETHOD_OBJ(rp2_canframe_from_bytes_obj, MP_ROM_PTR(&rp2_canframe_from_bytes_fun_obj));
+
+// Get a byte representation of the frame
+//
+// Converts the frame into a byte representation that can be passed in to the
+// static method for frame creation (i.e. round-tripping). Can be used to move
+// CAN frames over other networks (e.g. WiFi)
+STATIC mp_obj_t rp2_canframe_to_bytes(mp_obj_t self_in)
+{
+    rp2_canframe_obj_t *self = self_in;
+
+    // Buffer, in same format as 'from bytes' static method
+    uint8_t to_bytes[FRAME_FROM_BYTES_NUM];
+
+    can_make_bytes_from_frame(to_bytes, &self->frame, self->tag);
+
+    return make_mp_bytes(to_bytes, FRAME_FROM_BYTES_NUM);
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_1(rp2_canframe_to_bytes_obj, rp2_canframe_to_bytes);
 
 // Get the data as bytes
 STATIC mp_obj_t rp2_canframe_get_data(mp_obj_t self_in)
@@ -1256,6 +1375,7 @@ STATIC void rp2_canframe_print(const mp_print_t *print, mp_obj_t self_in, mp_pri
 
 STATIC const mp_map_elem_t rp2_canframe_locals_dict_table[] = {
     // Instance methods
+    { MP_OBJ_NEW_QSTR(MP_QSTR_to_bytes), (mp_obj_t)&rp2_canframe_to_bytes_obj },
     { MP_OBJ_NEW_QSTR(MP_QSTR_is_remote), (mp_obj_t)&rp2_canframe_is_remote_obj },
     { MP_OBJ_NEW_QSTR(MP_QSTR_get_canid), (mp_obj_t)&rp2_canframe_get_canid_obj },
     { MP_OBJ_NEW_QSTR(MP_QSTR_get_arbitration_id), (mp_obj_t)&rp2_canframe_get_arbitration_id_obj },
@@ -1272,13 +1392,15 @@ STATIC const mp_map_elem_t rp2_canframe_locals_dict_table[] = {
 };
 STATIC MP_DEFINE_CONST_DICT(rp2_canframe_locals_dict, rp2_canframe_locals_dict_table);
 
-const mp_obj_type_t rp2_canframe_type = {
-    { &mp_type_type },
-    .name = MP_QSTR_CANFrame,
-    .print = rp2_canframe_print,
-    .make_new = rp2_canframe_make_new,
-    .locals_dict = (mp_obj_t)&rp2_canframe_locals_dict,
-};
+MP_DEFINE_CONST_OBJ_TYPE(
+    rp2_canframe_type,
+    MP_QSTR_CANFrame,
+    MP_TYPE_FLAG_NONE,
+    make_new, rp2_canframe_make_new,
+    print, rp2_canframe_print,
+    locals_dict, &rp2_canframe_locals_dict
+    );
+
 ///////////////////////////////////// End of CANFrame class //////////////////////////////////////
 
 ////////////////////////////////////// Start of CANID class //////////////////////////////////////
@@ -1367,13 +1489,15 @@ STATIC const mp_map_elem_t rp2_canid_locals_dict_table[] = {
 };
 STATIC MP_DEFINE_CONST_DICT(rp2_canid_locals_dict, rp2_canid_locals_dict_table);
 
-const mp_obj_type_t rp2_canid_type = {
-    { &mp_type_type },
-    .name = MP_QSTR_CANID,
-    .print = rp2_canid_print,
-    .make_new = rp2_canid_make_new,
-    .locals_dict = (mp_obj_t)&rp2_canid_locals_dict,
-};
+MP_DEFINE_CONST_OBJ_TYPE(
+    rp2_canid_type,
+    MP_QSTR_CANID,
+    MP_TYPE_FLAG_NONE,
+    make_new, rp2_canid_make_new,
+    print, rp2_canid_print,
+    locals_dict, &rp2_canid_locals_dict
+    );
+
 ////////////////////////////////////// End of CANID class //////////////////////////////////////
 
 ///////////////////////////////// Start of CANIDFilter class ///////////////////////////////////
@@ -1381,7 +1505,7 @@ const mp_obj_type_t rp2_canid_type = {
 STATIC mp_obj_t rp2_canidfilter_make_new(const mp_obj_type_t *type, mp_uint_t n_args, mp_uint_t n_kw, const mp_obj_t *all_args)
 {
     static const mp_arg_t allowed_args[] = {
-        {MP_QSTR_filter_str,     MP_ARG_OBJ, {.u_obj = MP_OBJ_NULL}},
+        {MP_QSTR_filter_str,     MP_ARG_OBJ, {.u_obj = mp_const_none}},
     };
 
     mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
@@ -1395,13 +1519,13 @@ STATIC mp_obj_t rp2_canidfilter_make_new(const mp_obj_type_t *type, mp_uint_t n_
     // If no filter string is specified then the filter become a "match all". This can be placed
     // at the end of a filter list so that the earlier filters can be used to identify an incoming frame
     // because this one will always match.
-    if (filter_str == MP_OBJ_NULL) {
+    if (filter_str == mp_const_none) {
         // Set up a filter for "accept all"
         can_make_id_filter_all(&self->filter);
     }
     else {
         if (!MP_OBJ_IS_STR_OR_BYTES(filter_str)) {
-            nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_TypeError, "Filter must be a tring or bytes"));
+            nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_TypeError, "Filter must be a string or bytes"));
         }
 
         mp_buffer_info_t bufinfo;
@@ -1419,20 +1543,26 @@ STATIC mp_obj_t rp2_canidfilter_make_new(const mp_obj_type_t *type, mp_uint_t n_
         for (mp_uint_t i = 0; i < bufinfo.len; i++) {
             char ch = (((byte *) bufinfo.buf)[i]);
 
-            if (ch == '1') {
-                mask = (mask  << 1) | 1U;
-                match = (match  << 1) | 1U;
-            }
-            else if (ch == '0') {
-                mask = (mask << 1) | 1U;
-                match = (match  << 1);
-            }
-            else if (ch == 'X') {
-                mask <<= 1;
-                match <<= 1;
-            }
-            else {
-                nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_ValueError, "Illegal character in filter: must be '1', '0' or 'X'"));
+            mask <<= 1;
+            match <<= 1;
+            
+            switch(ch) {
+                case '1':
+                    // Must match 1
+                    mask |= 1U;
+                    match |= 1U;
+                    break;
+                case '0':
+                    // Must match 0
+                    mask |= 1U;
+                    match |= 0U;
+                    break;
+                case 'X':
+                    // Already both are zero
+                    break;
+                default:
+                    nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_ValueError, "Illegal character in filter: must be '1', '0' or 'X'"));
+                    break; // Not reached
             }
         }
         can_make_id_filter_masked(&self->filter, extended, match, mask);
@@ -1442,11 +1572,23 @@ STATIC mp_obj_t rp2_canidfilter_make_new(const mp_obj_type_t *type, mp_uint_t n_
 
 STATIC void rp2_canidfilter_print_mask(const mp_print_t *print, bool extended, uint32_t mask, uint32_t match)
 {
-    uint32_t size = extended ? 29U : 11U;
+    uint32_t size;
+
+    if (extended) {
+        mask <<= 3;
+        match <<= 3;
+        size = 29U;
+    }
+    else {
+        mask <<= 21;
+        match <<= 21;
+        size = 11U;
+    };
+
     for(uint32_t i = 0; i < size; i++) {
-        if (mask & (1U << (size -1U - i))) {
+        if (mask & 0x80000000U) {
             // Must match
-            if (match & (1U << (size -1U - i))) {
+            if (match & 0x80000000U) {
                 mp_printf(print, "1");
             }
             else {
@@ -1457,7 +1599,10 @@ STATIC void rp2_canidfilter_print_mask(const mp_print_t *print, bool extended, u
             // Don't care
             mp_printf(print, "X");
         }
+        mask <<= 1;
+        match <<= 1;
     }
+
 }
 
 STATIC void rp2_canidfilter_print(const mp_print_t *print, mp_obj_t self_in, mp_print_kind_t kind)
@@ -1486,13 +1631,14 @@ STATIC const mp_map_elem_t rp2_canidfilter_locals_dict_table[] = {
 };
 STATIC MP_DEFINE_CONST_DICT(rp2_canidfilter_locals_dict, rp2_canidfilter_locals_dict_table);
 
-const mp_obj_type_t rp2_canidfilter_type = {
-        { &mp_type_type },
-        .name = MP_QSTR_CANIDFilter,
-        .print = rp2_canidfilter_print,
-        .make_new = rp2_canidfilter_make_new,
-        .locals_dict = (mp_obj_t)&rp2_canidfilter_locals_dict,
-};
+MP_DEFINE_CONST_OBJ_TYPE(
+    rp2_canidfilter_type,
+    MP_QSTR_CANIDFilter,
+    MP_TYPE_FLAG_NONE,
+    make_new, rp2_canidfilter_make_new,
+    print, rp2_canidfilter_print,
+    locals_dict, &rp2_canidfilter_locals_dict
+    );
 
 ////////////////////////////////////// End of CANIDFilter class //////////////////////////////////////
 
@@ -1664,13 +1810,15 @@ STATIC const mp_map_elem_t rp2_canerror_locals_dict_table[] = {
 };
 STATIC MP_DEFINE_CONST_DICT(rp2_canerror_locals_dict, rp2_canerror_locals_dict_table);
 
-const mp_obj_type_t rp2_canerror_type = {
-        { &mp_type_type },
-        .name = MP_QSTR_CANError,
-        .print = rp2_canerror_print,
-        .make_new = rp2_canerror_make_new,
-        .locals_dict = (mp_obj_t)&rp2_canerror_locals_dict,
-};
+MP_DEFINE_CONST_OBJ_TYPE(
+    rp2_canerror_type,
+    MP_QSTR_CANError,
+    MP_TYPE_FLAG_NONE,
+    make_new, rp2_canerror_make_new,
+    print, rp2_canerror_print,
+    locals_dict, &rp2_canerror_locals_dict
+    );
+
 ////////////////////////////////////// End of CANError class //////////////////////////////////////
 
 ///////////////////////////////////// Start of CANOverflow class //////////////////////////////////
@@ -1744,13 +1892,15 @@ STATIC const mp_map_elem_t rp2_canoverflow_locals_dict_table[] = {
 };
 STATIC MP_DEFINE_CONST_DICT(rp2_canoverflow_locals_dict, rp2_canoverflow_locals_dict_table);
 
-const mp_obj_type_t rp2_canoverflow_type = {
-        { &mp_type_type },
-        .name = MP_QSTR_CANOverflow,
-        .print = rp2_canoverflow_print,
-        .make_new = rp2_canoverflow_make_new,
-        .locals_dict = (mp_obj_t)&rp2_canoverflow_locals_dict,
-};
+MP_DEFINE_CONST_OBJ_TYPE(
+    rp2_canoverflow_type,
+    MP_QSTR_CANOverflow,
+    MP_TYPE_FLAG_NONE,
+    make_new, rp2_canoverflow_make_new,
+    print, rp2_canoverflow_print,
+    locals_dict, &rp2_canoverflow_locals_dict
+    );
+
 ////////////////////////////////////// End of CANOverflow class ///////////////////////////////////
 
 //////////////////////////////// Start of callbacks of CANOverflow class //////////////////////////
@@ -1766,20 +1916,22 @@ void TIME_CRITICAL can_isr_callback_frame_tx(can_uref_t uref, uint32_t timestamp
     mp_frame->timestamp = timestamp;
     mp_frame->timestamp_valid = true;
 
-    // The CAN controller must exist or else this call would not be made
     can_frame_t *frame = &mp_frame->frame;
-    rp2_can_obj_t *self = MP_STATE_PORT(rp2_can_obj);
-    can_trigger_t *trigger = &self->triggers[0];
-    uint32_t arbitration_id = can_frame_get_arbitration_id(frame);
-    uint8_t dlc = can_frame_get_dlc(frame);
+    rp2_can_obj_t *self = MP_STATE_PORT(rp2_can_obj[0]);
+    // Guard against spurious interrupt callbacks
+    if (self != MP_OBJ_NULL) {
+        can_trigger_t *trigger = &self->triggers[0];
+        uint32_t arbitration_id = can_frame_get_arbitration_id(frame);
+        uint8_t dlc = can_frame_get_dlc(frame);
 
-    // Check to see if the transmitted frame matches and should trigger
-    if (trigger->enabled && trigger->on_tx) {
-        if (((arbitration_id & trigger->arbitration_id_mask) == trigger->arbitration_id_match) &&
-            ((dlc & trigger->can_dlc_mask) == self->triggers->can_dlc_match) &&
-            ((frame->data[0] & trigger->can_data_mask[0]) == self->triggers->can_data_match[0]) &&
-            ((frame->data[0] & trigger->can_data_mask[1]) == self->triggers->can_data_match[1])) {
-            pulse_trigger();
+        // Check to see if the transmitted frame matches and should trigger
+        if (trigger->enabled && trigger->on_tx) {
+            if (((arbitration_id & trigger->arbitration_id_mask) == trigger->arbitration_id_match) &&
+                ((dlc & trigger->can_dlc_mask) == self->triggers->can_dlc_match) &&
+                ((frame->data[0] & trigger->can_data_mask[0]) == self->triggers->can_data_match[0]) &&
+                ((frame->data[0] & trigger->can_data_mask[1]) == self->triggers->can_data_match[1])) {
+                pulse_trigger();
+            }
         }
     }
 }
@@ -1801,35 +1953,37 @@ void TIME_CRITICAL can_isr_callback_frame_rx(can_frame_t *frame, uint32_t timest
 {
     // Called with interrupts locked
 
-    // The CAN controller must exist or else this call would not be made
-    rp2_can_obj_t *self = MP_STATE_PORT(rp2_can_obj);
-    can_trigger_t *trigger = &self->triggers[0];
-    uint32_t arbitration_id = can_frame_get_arbitration_id(frame);
-    uint8_t dlc = can_frame_get_dlc(frame);
+    rp2_can_obj_t *self = MP_STATE_PORT(rp2_can_obj[0]);
+    // Guard against spurious interrupt callbacks
+    if (self != MP_OBJ_NULL) {
+        can_trigger_t *trigger = &self->triggers[0];
+        uint32_t arbitration_id = can_frame_get_arbitration_id(frame);
+        uint8_t dlc = can_frame_get_dlc(frame);
 
-    if (trigger->enabled && trigger->on_rx) {
-        if (((arbitration_id & trigger->arbitration_id_mask) == trigger->arbitration_id_match) &&
-            ((dlc & trigger->can_dlc_mask) == self->triggers->can_dlc_match) &&
-            ((frame->data[0] & trigger->can_data_mask[0]) == self->triggers->can_data_match[0]) &&
-            ((frame->data[0] & trigger->can_data_mask[1]) == self->triggers->can_data_match[1])) {
-            pulse_trigger();
+        if (trigger->enabled && trigger->on_rx) {
+            if (((arbitration_id & trigger->arbitration_id_mask) == trigger->arbitration_id_match) &&
+                ((dlc & trigger->can_dlc_mask) == self->triggers->can_dlc_match) &&
+                ((frame->data[0] & trigger->can_data_mask[0]) == self->triggers->can_data_match[0]) &&
+                ((frame->data[0] & trigger->can_data_mask[1]) == self->triggers->can_data_match[1])) {
+                pulse_trigger();
+            }
         }
-    }
 
-    // Potential callback to Python function (done after trigger because function could be slow)
-    if (self->mp_rx_callback_fn != MP_OBJ_NULL) {
-        // Frame here is created in a global space and does NOT have a lifetime beyond the
-        // callback.
-        static rp2_canframe_obj_t mp_frame_tmp;
-        mp_frame_tmp.frame = *frame;
-        mp_frame_tmp.base.type = &rp2_canframe_type;
-        mp_frame_tmp.tag = 0;
-        mp_frame_tmp.timestamp = timestamp;
-        mp_frame_tmp.timestamp_valid = true;
+        // Potential callback to Python function (done after trigger because function could be slow)
+        if (self->mp_rx_callback_fn != mp_const_none) {
+            // Frame here is created in a global space and does NOT have a lifetime beyond the
+            // callback.
+            static rp2_canframe_obj_t mp_frame_tmp;
+            mp_frame_tmp.frame = *frame;
+            mp_frame_tmp.base.type = &rp2_canframe_type;
+            mp_frame_tmp.tag = 0;
+            mp_frame_tmp.timestamp = timestamp;
+            mp_frame_tmp.timestamp_valid = true;
 
-        // Already has been verified that this function is a callable Python function, so
-        // hand it the CANFrame instance so the handler can inspect it and react quickly
-        mp_sched_schedule(self->mp_rx_callback_fn, MP_OBJ_FROM_PTR(&mp_frame_tmp));
+            // Already has been verified that this function is a callable Python function, so
+            // hand it the CANFrame instance so the handler can inspect it and react quickly
+            mp_sched_schedule(self->mp_rx_callback_fn, MP_OBJ_FROM_PTR(&mp_frame_tmp));
+        }
     }
 }
 
@@ -1838,14 +1992,19 @@ void TIME_CRITICAL can_isr_callback_error(can_error_t error, uint32_t timestamp)
 {
     // Called with interrupts locked
 
-    // The CAN controller must exist or else this call would not be made
-    rp2_can_obj_t *self = MP_STATE_PORT(rp2_can_obj);
-    can_trigger_t *trigger = &self->triggers[0];
-    
-    if (trigger->enabled && trigger->on_error) {
-        pulse_trigger();
+    rp2_can_obj_t *self = MP_STATE_PORT(rp2_can_obj[0]);
+
+    // Guard against a spurious interrupt that is raised after the controller is stopped.
+    if (self != MP_OBJ_NULL) {
+        can_trigger_t *trigger = &self->triggers[0];
+        
+        if (trigger->enabled && trigger->on_error) {
+            pulse_trigger();
+        }
     }
 }
 
+// In the future there may be more than one CAN controller
+MP_REGISTER_ROOT_POINTER(void *rp2_can_obj[1]);
 
 

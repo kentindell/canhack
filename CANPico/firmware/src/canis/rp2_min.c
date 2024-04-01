@@ -32,14 +32,22 @@
 // MIN on the Pico uses a second USB serial port (0 is stdin/stdout and used for REPL), allocated to
 // itf 1.
 
+#if CFG_TUD_CDC != 2
+#error "No second CDC for MIN"
+#endif
+
+// Second CDC port: corresponds to the descriptor index
 #define MIN_CDC_ITF         (1U)
 
 #ifndef TRANSPORT_PROTOCOL
 #error "MIN transport protocol not enabled"
 #endif
 
+// TODO expose this call in the MIN class as a function for writing bytes to the second port,
+//      which can be used as a performance check. Could pass in a list.
+
 // Writes all the bytes requested to the USB, returns when done (this may be slow due to running
-// in XIP flash)
+// in XIP flash).
 STATIC void usb_write(size_t len, uint8_t *src)
 {
     if (tud_cdc_n_connected(MIN_CDC_ITF)) {
@@ -61,6 +69,9 @@ STATIC void usb_write(size_t len, uint8_t *src)
 }
 
 // Read as many characters as possible from the USB
+// TODO expose this as a class method to allow it to be used as a performance check (see above)
+//      also could use a pre-allocated list that's overwritten rather than returning anything
+//      using the heap.
 STATIC uint32_t usb_read(uint8_t *dest, size_t max_len)
 {
     if (tud_cdc_n_connected(MIN_CDC_ITF) && tud_cdc_n_available(MIN_CDC_ITF)) {
@@ -72,7 +83,7 @@ STATIC uint32_t usb_read(uint8_t *dest, size_t max_len)
 // Deinit the root pointer
 void min_deinit(void) {
     // Called when the system is reset.
-    MP_STATE_PORT(rp2_min_obj) = NULL;
+    MP_STATE_PORT(rp2_min_obj[0]) = MP_OBJ_NULL;
 }
 
 
@@ -123,12 +134,13 @@ void min_application_handler(uint8_t min_id, uint8_t const *min_payload, uint8_t
     // Handles incoming MIN frames: accumulates the frames (as a 2-tuple) in a MicroPython list
 
     // All other MIN frames get added to a list to return to the Python caller to deal with
-    rp2_min_obj_t *self = MP_STATE_PORT(rp2_min_obj);
-    if (self != NULL) {
+    rp2_min_obj_t *self = MP_STATE_PORT(rp2_min_obj[0]);
+    if (self != MP_OBJ_NULL) {
         mp_obj_tuple_t *tuple = mp_obj_new_tuple(2, NULL);
         tuple->items[0] = MP_OBJ_NEW_SMALL_INT(min_id);
         tuple->items[1] = make_mp_bytes(min_payload, len_payload);
-        if (self->recv_list == NULL) {
+        // If list was empty so far (i.e. an empty tuple) then use the heap to create an empty list
+        if (self->recv_list == mp_const_empty_tuple) {
             self->recv_list = mp_obj_new_list(0, NULL);
         }
         mp_obj_list_append(self->recv_list, tuple);
@@ -147,9 +159,9 @@ uint16_t min_tx_space(uint8_t port)
 
 void min_tx_byte(uint8_t port, uint8_t byte)
 {
-    rp2_min_obj_t *self = MP_STATE_PORT(rp2_min_obj);
+    rp2_min_obj_t *self = MP_STATE_PORT(rp2_min_obj[0]);
 
-    if (self != NULL) {
+    if (self != MP_OBJ_NULL) {
         if(self->outgoing_cdc_buf_len < CDC_BUF_SIZE) {
             self->outgoing_cdc_buf[self->outgoing_cdc_buf_len++] = byte;
         }
@@ -157,23 +169,23 @@ void min_tx_byte(uint8_t port, uint8_t byte)
 }
 
 void min_tx_start(uint8_t port) {
-    rp2_min_obj_t *self = MP_STATE_PORT(rp2_min_obj);
-    if (self != NULL) {
+    rp2_min_obj_t *self = MP_STATE_PORT(rp2_min_obj[0]);
+    if (self != MP_OBJ_NULL) {
         self->outgoing_cdc_buf_len = 0;
     }
 }
 
 void min_tx_finished(uint8_t port) {
-    rp2_min_obj_t *self = MP_STATE_PORT(rp2_min_obj);
-    if (self != NULL) {
+    rp2_min_obj_t *self = MP_STATE_PORT(rp2_min_obj[0]);
+    if (self != MP_OBJ_NULL) {
         usb_write(self->outgoing_cdc_buf_len, self->outgoing_cdc_buf);
     }
 }
 
 void min_init(void) {
-    // Set up the root pointer to a null CAN controller object so that the memory is not allocated
-    // until CAN is used.
-    MP_STATE_PORT(rp2_min_obj) = NULL;
+    // Set up the root pointer to a null controller object so that the memory is not allocated
+    // until MIN is used.
+    MP_STATE_PORT(rp2_min_obj[0]) = MP_OBJ_NULL;
 }
 
 //////////////////////////////// MicroPython bindings ////////////////////////////////
@@ -204,17 +216,17 @@ STATIC mp_obj_t rp2_min_make_new(const mp_obj_type_t *type, mp_uint_t n_args, mp
     mp_arg_check_num(n_args, n_kw, 0, MP_OBJ_FUN_ARGS_MAX, true);
 
     // Create class instance for controller
-    rp2_min_obj_t *self = MP_STATE_PORT(rp2_min_obj);
+    rp2_min_obj_t *self = MP_STATE_PORT(rp2_min_obj[0]);
 
-    if (MP_STATE_PORT(rp2_min_obj) == NULL) {
+    if (MP_STATE_PORT(rp2_min_obj[0]) == MP_OBJ_NULL) {
         // Newly create object (we don't want it created always because it's a fairly large object, with
         // large receive FIFO and this shouldn't be allocated until needed).
         self = m_new_obj(rp2_min_obj_t);
         self->base.type = &rp2_min_type;
-        MP_STATE_PORT(rp2_min_obj) = self;
+        MP_STATE_PORT(rp2_min_obj[0]) = self;
     }
     else {
-        self = MP_STATE_PORT(rp2_min_obj);
+        self = MP_STATE_PORT(rp2_min_obj[0]);
     }
 
     // configure the object
@@ -244,8 +256,8 @@ STATIC mp_obj_t rp2_min_send_frame(mp_uint_t n_args, const mp_obj_t *pos_args, m
     mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
     mp_arg_parse_all(n_args - 1, pos_args + 1, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
 
-    if (MP_STATE_PORT(rp2_min_obj) != NULL) {
-
+    if (MP_STATE_PORT(rp2_min_obj[0]) != MP_OBJ_NULL) {
+        // TODO replace with common copy bytes function
         // get the buffer to send from
         mp_buffer_info_t bufinfo;
         uint8_t data[1];
@@ -273,20 +285,16 @@ STATIC mp_obj_t rp2_min_recv(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_
 {
     rp2_min_obj_t *self = pos_args[0];
 
-    if (MP_STATE_PORT(rp2_min_obj) != NULL) {
-        // Zero the frames; if there are some then the frame handler will create a list to put them in
-        self->recv_list = NULL;
+    if (MP_STATE_PORT(rp2_min_obj[0]) != MP_OBJ_NULL) {
+        // Zero the frames with an empty tuple; if there are some frames
+        // then the frame handler will create a list to put them in
+        self->recv_list = mp_const_empty_tuple;
 
         // Pull out all the bytes that have accumulated in the VCP buffer and pass to MIN.
         self->incoming_cdc_buf_len = usb_read(self->incoming_cdc_buf, sizeof(self->incoming_cdc_buf));
         min_poll(&self->min_context, self->incoming_cdc_buf, self->incoming_cdc_buf_len);
 
-        if(self->recv_list == NULL) {
-            return mp_const_none;
-        }
-        else {
-            return self->recv_list; // Returns a list of MIN frames that weren't handled automatically by the transport protocol
-        }
+        return self->recv_list; // Returns a list of MIN frames that weren't handled automatically by the transport protocol
     }
     else {
         nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_RuntimeError, "MIN de-initialized"));
@@ -302,7 +310,7 @@ STATIC mp_obj_t rp2_min_deinit(mp_uint_t n_args, const mp_obj_t *pos_args, mp_ma
 
     // Remove the root pointer so it will be garbage collected eventually when the reference to
     // it itself garbage collected
-    MP_STATE_PORT(rp2_min_obj) = NULL;
+    MP_STATE_PORT(rp2_min_obj[0]) = MP_OBJ_NULL;
 
     return mp_const_none;
 }
@@ -319,7 +327,7 @@ STATIC mp_obj_t rp2_min_send_bytes(mp_uint_t n_args, const mp_obj_t *pos_args, m
     mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
     mp_arg_parse_all(n_args - 1, pos_args + 1, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
 
-    if (MP_STATE_PORT(rp2_min_obj) != NULL) {
+    if (MP_STATE_PORT(rp2_min_obj[0]) != MP_OBJ_NULL) {
         // get the buffer to send from
         mp_buffer_info_t bufinfo;
         uint8_t data[1];
@@ -349,7 +357,7 @@ STATIC mp_obj_t rp2_min_recv_bytes(mp_uint_t n_args, const mp_obj_t *pos_args, m
 
     uint8_t buf[64];
 
-    if (MP_STATE_PORT(rp2_min_obj) != NULL) {
+    if (MP_STATE_PORT(rp2_min_obj[0]) != MP_OBJ_NULL) {
         MIN_DEBUG_PRINT(MP_PYTHON_PRINTER, "Preparing to read from USB\n");
         uint32_t len = usb_read(buf, sizeof(buf));
         MIN_DEBUG_PRINT(MP_PYTHON_PRINTER, "Read %d bytes from USB\n", len);
@@ -373,10 +381,13 @@ STATIC const mp_map_elem_t rp2_min_locals_dict_table[] = {
 };
 STATIC MP_DEFINE_CONST_DICT(rp2_min_locals_dict, rp2_min_locals_dict_table);
 
-const mp_obj_type_t rp2_min_type = {
-    { &mp_type_type },
-    .name = MP_QSTR_MIN,
-    .print = rp2_min_print,
-    .make_new = rp2_min_make_new,
-    .locals_dict = (mp_obj_t)&rp2_min_locals_dict,
-};
+MP_DEFINE_CONST_OBJ_TYPE(
+    rp2_min_type,
+    MP_QSTR_MIN,
+    MP_TYPE_FLAG_NONE,
+    make_new, rp2_min_make_new,
+    print, rp2_min_print,
+    locals_dict, &rp2_min_locals_dict
+    );
+
+MP_REGISTER_ROOT_POINTER(void *rp2_min_obj[1]);

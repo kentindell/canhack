@@ -35,7 +35,7 @@ typedef struct _rp2_min_obj_t {
     uint16_t outgoing_cdc_buf_len;
     uint8_t incoming_cdc_buf[CDC_BUF_SIZE];
     uint32_t incoming_cdc_buf_len;
-    // Received MIN frames
-    mp_obj_list_t *recv_list;
+    // Received MIN frames, either an empty tuple or a list
+    mp_obj_t *recv_list;
     // TODO have a per-context list
 } rp2_min_obj_t;

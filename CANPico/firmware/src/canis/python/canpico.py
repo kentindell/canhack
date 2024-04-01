@@ -18,13 +18,8 @@ and used like this from a REPL prompt:
 from struct import pack, unpack
 from machine import Pin
 from time import sleep_ms
-from rp2 import CAN, CANFrame, CANID, CANHack, MIN
+from rp2 import CAN, CANFrame, CANID, CANHack
 from utime import sleep, sleep_ms
-
-urgent = CANFrame(CANID(0x10), data=b'urgent')
-slow = CANFrame(CANID(0x700))
-medium_frames = [CANFrame(CANID(0x300 + i), data=bytes([i])) for i in range(10)]
-sync_frames = [CANFrame(CANID(0)), CANFrame(CANID(1), data=b'deadbeef')]
 
 
 class CANPico:
@@ -65,18 +60,6 @@ class CANPico:
             except:
                 pass
 
-    # Send a periodic CAN frame with an incrementing payload
-    def periodic(self, can_id=CANID(0x123), period_ms=100, i=0):
-        while True:
-            f = CANFrame(can_id, data=pack('>I', i))
-            if period_ms is not None:
-                sleep_ms(period_ms)
-            try:
-                self.c.send_frame(f)
-                i += 1
-            except:
-                pass
-
     # Send a frame and block until it is sent
     def send_wait(self, f):
         if not isinstance(f, CANFrame):
@@ -95,7 +78,6 @@ class CANPico:
             except:
                 pass
 
-    # Wait until there is space and then send a frame
     def always_send2(self, f):
         while True:
             if self.c.get_send_space() > 0:
@@ -117,7 +99,6 @@ class CANPico:
             self.c.send_frame(f2)
             sleep(1)
 
-    # Measure the clock drift between two CANPico boards
     def drift(self):
         self.c.recv()  # Clear out old frames
         ts = None  # Don't know the first timestamp yet
@@ -132,36 +113,7 @@ class CANPico:
                         if ts is not None:  # If the first timestamp is known then the offset can be computed
                             print(sender_ts - ts)
 
-    # Send a spoof frame via CANHack
     def spoof(self, f, timeout=500000):
         self.ch.set_frame(can_id=f.get_arbitration_id(), extended=f.is_extended(), remote=f.is_remote(), data=f.get_data())
         self.ch.spoof_frame(timeout=timeout)
-
-    # Simple CAN bus uploading monitor
-    def minmon(self):
-        m = MIN()
-        while True:
-            b = self.c.recv(as_bytes=True)
-            if b:
-                m.send_frame(1, b)
-            m.recv()
-
-
-    # Wait for a frame
-    def recv_wait(self):
-        self.c.recv()  # Throw away any left-over pending frames
-        while True:
-            frames = self.c.recv()
-            if len(frames) > 0:
-                return frames
-
-    # Send a frame after receiving a frame
-    def sync_send_frame(self, f):
-        self.recv_wait()
-        self.c.send_frame(f)
-
-    # Send frames after receiving a frame
-    def sync_send_frames(self, frames, fifo=False):
-        self.recv_wait()
-        self.c.send_frames(frames, fifo=fifo)
 

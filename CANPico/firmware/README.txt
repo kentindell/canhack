@@ -1,8 +1,89 @@
+Release 2024-04-01 of the CANPico firmware
+==========================================
 
-+--------------------------------------------------------------------------------------------------------------------+
-| Note: Canis Labs has released CANPico firmware containing additional Python APIs to the CryptoCAN messaging scheme |
-| and a software-emulated hardware security module (HSM). This can be downloaded from canislabs.com/cryptocan.       |
-+--------------------------------------------------------------------------------------------------------------------+
+This is built on the v1.22.2 release of MicroPython for the Pico, 
+
+- The Canis Labs CANPico board (containing a Microchip MCP2517FD CAN controller)
+- The Canis Labs CANHack board (containing just a CAN transceiver)
+- The Car Hacking Village DEF CON 30 board (containing just a CAN transceiver)
+
+Changes to last release of firmware:
+    - Update to v1.22.2 of the upstream MicroPython (which adds Bluetooth support)
+
+There are now multiple builds of the firmware for multiple boards:
+
+fw_20240401_w.uf2           - Firmware for the CANPico + Pico W (the Rev2 boards are supplied with a socketed Pico W)
+fw_20240401_p.uf2           - Firmware for the CANPico + Pico
+
+fw_20240401_chcc_w.uf2      - For the CANPico + Pico W plus CANHack and CryptoCAN/HSM APIs
+fw_20240401_chcc_p.uf2      - For the CANPico + Pico plus CANHack and CryptoCAN/HSM APIs
+fw_20240401_dc30_badge.uf2  - For the DEFCON30 CHV badge
+fw_20240401_canhack_uf2     - For the CANHack board
+
+To build the firmware:
+
+1. Get and build the upstream
+-----------------------------
+Get and build the v1.22.2 firwmare to check that everything work on the upstream.
+This will test that the compiler toolchain works.
+   
+2. Add MIN support and CAN drivers
+----------------------------------
+$ cd lib
+$ git clone https://github.com/min-protocol/min.git
+$ git clone https://github.com/kentindell/canis-can-sdk.git
+
+The CANPico firmware provides two USB serial ports on a single USB cable. The first one
+is the regular REPL commandline, and the second is used by MIN for communicating with
+the host.
+
+3. Patch the firmware
+---------------------
+Copy the files in this directory into the MicroPython file hierarchy as follows:
+
+File			        Copy to
+----                            -------
+tusb_config.h                   shared/tinyusb
+mp_usbd_descriptor.c            shared/tinyusb
+RPI_PICO/mpconfigport.h         ports/rp2/RPI_PICO/mpconfigport.h
+RPI_PICO_W/mpconfigport.h       ports/rp2/RPI_PICO_W/mpconfigport.h
+canis/*                         ports/rp2/canis/
+CMakeLists.txt                  ports/rp2
+main.c                          ports/rp2
+modrp2.c                        ports/rp2
+
+4. Build the firmware
+---------------------
+There are several variants of the firmware build. To build specific modules, create
+a file with the name of the module (e.g. use the 'touch' command) in the
+directory ports/rp2.
+
+The file names are:
+
+CHV_DEFCON30_BADGE (for the DEFCON 30 Car Hacking Village badge)
+CANPICO_BOARD (for the Canis Labs CANPico board)
+
+There are other optional modules:
+
+MIN_PROTOCOL (to include the MIN protocol on the second USB serial port)
+CANHACK (to include the CANHack class for bit-banging the CAN transceiver)
+
+Then to build for the Pico:
+
+$ make BOARD=RPI_PICO clean
+$ make BOARD=RPI_PICO submodules
+$ make BOARD=RPI_PICO
+$ cp build-RPI_PICO/firmware.uf2 fw_p.uf2
+
+Or to build for the Pico W:
+
+$ make BOARD=RPI_PICO_W clean
+$ make BOARD=RPI_PICO_W submodules
+$ make BOARD=RPI_PICO_W
+$ cp build-RPI_PICO_W/firmware.uf2 fw_w.uf2
+
+Copy the firmware to the Pico hardware in the normal way (i.e. hold down the boot button when
+powering on, and copy into the RPI folder that is mounted).
 
 Release 2022-08-01 of the CANPico firmware
 ==========================================

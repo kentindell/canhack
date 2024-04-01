@@ -22,9 +22,10 @@
 #include "py/mphal.h"
 #include "py/objstr.h"
 #include "py/obj.h"
-#include "rp2_canhack.h"
 #include "pico/stdlib.h"
 #include "hardware/pwm.h"
+#include "rp2_canhack.h"
+#include "common.h"
 
 // Placeholders for code that might not run on a second core and will be shared with other code
 // that generates interrupts
@@ -45,26 +46,6 @@ STATIC void inline buf_get_for_send(mp_obj_t o, mp_buffer_info_t *bufinfo, byte 
     } else {
         mp_get_buffer_raise(o, bufinfo, MP_BUFFER_READ);
     }
-}
-
-STATIC uint32_t copy_mp_bytes(mp_obj_t *mp_bytes, uint8_t *dest, uint32_t max_len)
-{
-    if(!MP_OBJ_IS_STR_OR_BYTES(mp_bytes)) {
-        nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_TypeError, "Bytes parameter expected"));
-    }
-
-    mp_buffer_info_t bufinfo;
-    uint8_t data[1];
-    buf_get_for_send(mp_bytes, &bufinfo, data);
-
-    if (bufinfo.len > max_len) {
-        nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_ValueError, "Bytes parameter too long"));
-    }
-    for (mp_uint_t i = 0; i < bufinfo.len; i++) {
-        dest[i] = ((byte*)bufinfo.buf)[i];
-    }
-
-    return bufinfo.len;
 }
 
 typedef struct _canhack_rp2_obj_t {
@@ -164,13 +145,14 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_KW(rp2_canhack_stop_obj, 1, rp2_canhack_stop);
 STATIC mp_obj_t rp2_canhack_set_frame(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args)
 {
     static const mp_arg_t allowed_args[] = {
-            { MP_QSTR_can_id,    MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 0x7ff} },
-            { MP_QSTR_remote,    MP_ARG_KW_ONLY | MP_ARG_BOOL, {.u_bool = false} },
-            { MP_QSTR_extended,  MP_ARG_KW_ONLY | MP_ARG_BOOL, {.u_bool = false} },
-            { MP_QSTR_data,      MP_ARG_KW_ONLY  | MP_ARG_OBJ,  {.u_obj = MP_OBJ_NULL} },
-            { MP_QSTR_set_dlc,   MP_ARG_KW_ONLY  | MP_ARG_BOOL,  {.u_bool = false} },
-            { MP_QSTR_dlc,       MP_ARG_KW_ONLY  | MP_ARG_INT,  {.u_int = 0} },
-            { MP_QSTR_second,    MP_ARG_KW_ONLY  | MP_ARG_BOOL,  {.u_bool = false} },
+            { MP_QSTR_can_id,    MP_ARG_REQUIRED | MP_ARG_INT,  {.u_int  = 0x7ff} },
+            { MP_QSTR_remote,    MP_ARG_KW_ONLY | MP_ARG_BOOL,  {.u_bool = false} },
+            { MP_QSTR_extended,  MP_ARG_KW_ONLY | MP_ARG_BOOL,  {.u_bool = false} },
+            { MP_QSTR_data,      MP_ARG_OBJ,                    {.u_obj  = mp_const_none} },
+            { MP_QSTR_set_dlc,   MP_ARG_KW_ONLY  | MP_ARG_BOOL, {.u_bool = false} },
+            { MP_QSTR_dlc,       MP_ARG_KW_ONLY  | MP_ARG_INT,  {.u_int  = 0} },
+            { MP_QSTR_second,    MP_ARG_KW_ONLY  | MP_ARG_BOOL, {.u_bool = false} },
+            { MP_QSTR_no_ack,    MP_ARG_KW_ONLY | MP_ARG_BOOL, {.u_bool = false} },
     };
 
     // parse args
@@ -182,14 +164,15 @@ STATIC mp_obj_t rp2_canhack_set_frame(mp_uint_t n_args, const mp_obj_t *pos_args
     bool ide = args[2].u_bool;
     mp_obj_t data_obj = args[3].u_obj;
     bool set_dlc = args[4].u_bool;
-
+    // args[5] dealt with below
     bool second = args[6].u_bool;
+    bool no_ack = args[7].u_bool;
 
     uint32_t len;
     uint32_t dlc;
     uint8_t data[8];
 
-    if(data_obj == MP_OBJ_NULL) {
+    if(data_obj == mp_const_none) {
         len = 0;
     }
     else {
@@ -231,6 +214,11 @@ STATIC mp_obj_t rp2_canhack_set_frame(mp_uint_t n_args, const mp_obj_t *pos_args
     canhack_frame_t *frame = canhack_get_frame(second);
     canhack_set_frame(id_a, id_b, rtr, ide, dlc, data, frame);
 
+    if (no_ack) {
+        // If ACK=1 is wanted (i.e. a pure frame) then override the value created by the CANHack toolkit
+        frame->tx_bitstream[frame->last_crc_bit + 2U] = 1U;
+    }
+
     return mp_const_none;
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_KW(rp2_canhack_set_frame_obj, 1, rp2_canhack_set_frame);
@@ -243,17 +231,6 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_KW(rp2_canhack_set_frame_obj, 1, rp2_canhack_set_
 #define ANSI_COLOR_CYAN    "\x1b[36m"
 #define ANSI_COLOR_RESET   "\x1b[0m"
 
-// Simple function to create Micropython bytes from a block of memory
-STATIC mp_obj_t make_mp_bytes(const uint8_t *src, uint32_t len)
-{
-    vstr_t vstr;
-    vstr_init_len(&vstr, len);
-    for (mp_uint_t i = 0; i < len; i++) {
-        vstr.buf[i] = src[i];
-    }
-
-    return mp_obj_new_str_from_vstr(&mp_type_bytes, &vstr);
-}
 
 STATIC mp_obj_t rp2_canhack_get_frame(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args)
 {
@@ -740,23 +717,12 @@ STATIC void rp2_canhack_print(const mp_print_t *print, mp_obj_t self_in, mp_prin
     mp_printf(print, "CANHack(bit_rate=%d)", self->bit_rate_kbps);
 }
 
-mp_uint_t canhack_ioctl(mp_obj_t self_in, mp_uint_t request, uintptr_t arg, int *errcode) {
-    // rp2_canhack_obj_t *self = MP_OBJ_TO_PTR(self_in);
+MP_DEFINE_CONST_OBJ_TYPE(
+    rp2_canhack_type,
+    MP_QSTR_CANHack,
+    MP_TYPE_FLAG_NONE,
+    make_new, rp2_canhack_make_new,
+    print, rp2_canhack_print,
+    locals_dict, &rp2_canhack_locals_dict
+    );
 
-    *errcode = MP_EINVAL;
-    return -1;
-}
-
-STATIC const mp_stream_p_t canhack_stream_p = {
-        .ioctl = canhack_ioctl,
-        .is_text = false,
-};
-
-const mp_obj_type_t rp2_canhack_type = {
-        { &mp_type_type },
-        .name = MP_QSTR_CANHack,
-        .print = rp2_canhack_print,
-        .make_new = rp2_canhack_make_new,
-        .protocol = &canhack_stream_p,
-        .locals_dict = (mp_obj_t)&rp2_canhack_locals_dict,
-};

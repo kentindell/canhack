@@ -21,6 +21,8 @@
 
 #include "canapi.h"
 
+#include "canobj.h"
+
 #ifdef CAN_DEBUG
 #define CAN_DEBUG_PRINT(fmt, args...)   mp_printf(MP_PYTHON_PRINTER, fmt, ##args)
 #else
@@ -88,36 +90,14 @@ void can_deinit(void);
 // Bytes 11-18: Data mask
 // Bytes 19-26: Data match
 
-// Transmit event FIFO that records the timestamp and the tag of the transmitted frame
-typedef struct {
-    uint32_t arbitration_id_mask;                       // Mask/match values over ID, DLC and data
-    uint32_t arbitration_id_match;
-    bool ide_match;
-    uint32_t can_data_mask[2];
-    uint32_t can_data_match[2];
-    uint8_t can_dlc_mask;
-    uint8_t can_dlc_match;
-    bool on_error;                                      // Set if should trigger on error
-    bool on_rx;                                         // Set if should trigger on receiving a matching frame
-    bool on_tx;                                         // Set if should trigger on a transmitting a matching frame
-    bool enabled;                                       // Set if trigger is enabled
-} can_trigger_t;
-
 // The six CAN API classes:
 //
-// CAN
+// CAN (see canobj.h)
 // CANID
 // CANFrame
 // CANIDFilter
 // CANError
 // CANOverflow
-
-typedef struct _rp2_can_obj_t {
-    mp_obj_base_t base;
-    can_controller_t controller;
-    can_trigger_t triggers[1];                          // TODO allow multiple triggers
-    mp_obj_t mp_rx_callback_fn;                         // Python function to call on receive
-} rp2_can_obj_t;
 
 typedef struct _rp2_canid_obj_t {
     mp_obj_base_t base;
