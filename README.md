@@ -50,6 +50,7 @@ for the following hardware:
 - Canis Labs [CANPico board](https://canislabs.com/canpico/)
 - Canis Labs CANHack board (this uses the same firmware as the CANPico)
 - Car Hacking Village DEF CON 30 badge
+- Oliver @hartkopp 's [bit-bang-only](docs/BitBangOnlyPico.md) low-cost setup
 
 The MicroPython firmware for the CHV DEF CON 30 badge is located in:
 
