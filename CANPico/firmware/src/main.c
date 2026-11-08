@@ -52,6 +52,7 @@
 #include "pico/unique_id.h"
 #include "hardware/rtc.h"
 #include "hardware/structs/rosc.h"
+#include "hardware/vreg.h"
 #if MICROPY_PY_LWIP
 #include "lwip/init.h"
 #include "lwip/apps/mdns.h"
@@ -93,6 +94,17 @@ int main(int argc, char **argv) {
     // This is a tickless port, interrupts should always trigger SEV.
     SCB->SCR |= SCB_SCR_SEVONPEND_Msk;
 
+    // Set System Clock to 250 MHz to enable FD support.
+    // The RP2040 default core voltage (1.10 V) is not reliably stable at 250 MHz; without a
+    // voltage boost the CPU can glitch, which corrupts the hand-timed CAN FD bit stream and
+    // shows up on a receiver (e.g. PCAN) as CRC/form errors. Raise the core voltage and let it
+    // settle before switching the system clock.
+    #ifdef CANHACK_FD
+    vreg_set_voltage(VREG_VOLTAGE_1_20);
+    sleep_ms(2);
+    set_sys_clock_khz(250000, true);
+    #endif
+
     #if MICROPY_HW_ENABLE_UART_REPL
     bi_decl(bi_program_feature("UART REPL"))
     setup_default_uart();
@@ -114,6 +126,7 @@ int main(int argc, char **argv) {
     bi_decl(bi_program_feature("thread support"))
     mp_thread_init();
     #endif
+
 
     // Start and initialise the RTC
     datetime_t t = {

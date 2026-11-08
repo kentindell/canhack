@@ -1,0 +1,5 @@
+[submodule "CANPico/firmware/micropython"]
+	path = CANPico/firmware/micropython
+	url = https://github.com/micropython/micropython.git
+	branch = v1.22.2
+	ignore = dirty

@@ -1,7 +1,81 @@
+CAN FD support (experimental)
+==============================
+
+This firmware contains an experimental extension of the CANHack toolkit that can bit-bang
+CAN FD frames (fixed bit rates: 500 kbit/s arbitration, 2 Mbit/s data). It originates from
+the bachelor thesis of Fynn Denecke (see docs/ on the classic2 branch) and is enabled by an
+extra build module file:
+
+    CANHACK_FD   (enables the CAN FD code path, the 700-bit frame buffer and the 250 MHz
+                  overclock in main.c that is required to meet the 2 Mbit/s data-phase timing)
+
+Building (recommended: the self-contained way)
+-----------------------------------------------
+From the repository ROOT, run ./build.sh -- see BUILDING.md for prerequisites and
+options. MicroPython is pinned as a git submodule (CANPico/firmware/micropython,
+v1.22.2), so all dependencies live inside the checkout; build.sh fetches it on first
+run, symlinks this firmware's files into the rp2 port (no copying), builds, and writes
+fw_canhack_RPI_PICO.uf2 to the repo root.
+
+    $ export ARM_TOOLCHAIN_PATH=/opt/arm-gnu-toolchain-13.3.rel1-x86_64-arm-none-eabi
+    $ ./build.sh
+
+build.sh runs `make submodules` (pico-sdk, tinyusb, ...), enables the module markers
+(default CANHACK_BOARD + CANHACK_FD; CANHACK is auto-enabled), stamps the git hash,
+does a clean configure so the build timestamp is fresh, and copies out the .uf2.
+Overrides: BOARD=RPI_PICO_W, MODULES="CANPICO_BOARD CANHACK CANHACK_FD", MPY_DIR=/elsewhere.
+(CANPico/firmware/build.sh still works as a wrapper to the root ./build.sh.)
+
+Building by hand (if you prefer the classic overlay-into-ports/rp2 flow)
+-----------------------------------------------------------------------
+Copy CMakeLists.txt, main.c, modrp2.c and canis/* into <micropython>/ports/rp2 (and
+tusb_config.h, mp_usbd_descriptor.c into shared/tinyusb, the board mpconfigboard.h into
+ports/rp2/boards/<BOARD>/), then:
+
+    $ cd ports/rp2
+    $ touch CANHACK_BOARD CANHACK_FD      # CANHACK is enabled automatically by CANHACK_BOARD
+    $ export CANHACK_FD_GITHASH="$(git -C /path/to/canhack_fd rev-parse --short HEAD)"
+    $ rm -rf build-RPI_PICO               # clean configure so the build timestamp is refreshed
+    $ make BOARD=RPI_PICO submodules
+    $ make BOARD=RPI_PICO
+    $ cp build-RPI_PICO/firmware.uf2 fw_canhack_fd.uf2
+
+The running firmware identifies itself (uname-like) from the Python shell:
+
+    >>> ch = rp2.CANHack(bit_rate=500)
+    >>> ch.build_info()
+    'canhack_fd g1a2b3c4 built 2026-10-21 14:59:12 UTC'
+
+(The build timestamp is captured at CMake configure time, so do the `rm -rf build-RPI_PICO`
+clean above to make sure it reflects this build. Without CANHACK_FD_GITHASH set, the hash reads
+"unknown".)
+
+(For a CANPico board that also has the MCP2517FD controller, additionally `touch CANPICO_BOARD
+CANHACK`.)  The canis-can-sdk clone is only needed when CAN (the MCP2517FD driver) is built;
+a CANHACK_BOARD-only FD build does not require it.
+
+Important: the 250 MHz overclock runs the RP2040 outside its officially specified range. The
+core voltage is raised (VREG 1.20 V) in main.c before the clock switch to keep it stable; at
+the default 1.10 V the CPU can glitch and corrupt the hand-timed FD bit stream. The data bit
+rate is fixed at 2 Mbit/s and cannot be changed without recomputing the bit-time constants in
+canis/rp2_canhack.h.
+
+The CAN FD Python API (on the rp2.CANHack class) adds these keyword arguments:
+
+    set_frame(can_id, ..., fd=True, brs=True, esi=True)   # fd enables CAN FD; brs = 2 Mbit/s
+                                                          # data phase; esi = error state ind.
+    send_frame(...)                                       # unchanged; sends the set FD frame
+    send_janus_frame(..., sync_time_fd=31, split_time_fd=78)   # FD Janus timings (see below)
+    loopback(fd=True)
+
+See CANFD_STATUS.md in this directory for the current, verified status, the known limitations
+and a hardware bring-up / scope test plan.
+
+
 Release 2024-04-01 of the CANPico firmware
 ==========================================
 
-This is built on the v1.22.2 release of MicroPython for the Pico, 
+This is built on the v1.22.2 release of MicroPython for the Pico,
 
 - The Canis Labs CANPico board (containing a Microchip MCP2517FD CAN controller)
 - The Canis Labs CANHack board (containing just a CAN transceiver)

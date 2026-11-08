@@ -36,7 +36,7 @@
 // The Pi Pico RP2040 has a timer, but it is clocked at 1us, which is too coarse a timer
 // for CANHack. Instead, a PWM is used.
 
-#if defined(CANPICO_BOARD) || defined(CANHACK_BOARD)
+#if defined(CANPICO) || defined(CANHACK)
 #define     CAN_TX_PIN                      (22U)
 #define     CAN_RX_PIN                      (21U)
 #define     DEBUG_PIN                       (2U)
@@ -45,24 +45,38 @@
 #define     CAN_RX_PIN                      (16U)
 #define     DEBUG_PIN                       (14U)       // CAN active
 #else
-#error "One of CANPICO, CANHACK or CHV_DEFCON30_BADGE must be defined!"
+#error "One of CANPICO, CANHACK (FD) or CHV_DEFCON30_BADGE must be defined!"
 #endif
 
 #define     CANHACK_PWM                     (7U)
+
+#ifdef CANHACK_FD
+#define     BIT_TIME                        (499U)      // Time adjusted for 250 MHz
+#define     SAMPLE_POINT_OFFSET             (300U)      // Time adjusted for 250 MHz
+#define     DEFAULT_LOOPBACK_OFFSET         (186U)      // Time adjusted for 250 MHz
+#define     FALLING_EDGE_RECALIBRATE        (62U)       // Time adjusted for 250 MHz
+#define     FD_CONFIGURED                   true
+#else
 #define     BIT_TIME                        (249U)
+#define     SAMPLE_POINT_OFFSET             (150U)
+#define     DEFAULT_LOOPBACK_OFFSET         (93U)
+#define     FALLING_EDGE_RECALIBRATE        (31U)
+#define     FD_CONFIGURED                   false
+#endif
+
+#define     BIT_TIME_FD                     (125U)      // Bit Time for high speed mode
+#define     SAMPLE_POINT_OFFSET_FD          (75U)       // Sample Offset for high speed mode
 #define     BAUD_500KBIT_PRESCALE           (1U)
 #define     BAUD_250KBIT_PRESCALE           (2U)
 #define     BAUD_125KBIT_PRESCALE           (4U)
-#define     SAMPLE_POINT_OFFSET             (150U)
-#define     DEFAULT_LOOPBACK_OFFSET         (93U)
 #define     SAMPLE_TO_BIT_END               (BIT_TIME - SAMPLE_POINT_OFFSET)
-#define     FALLING_EDGE_RECALIBRATE        (31U)
+#define     SAMPLE_TO_BIT_END_FD            (BIT_TIME_FD - SAMPLE_POINT_OFFSET_FD)
 
 #define     TIME_CRITICAL                   __attribute__((noinline, long_call, section(".time_critical")))
 
-#if (BIT_TIME * 180 > 65535)
+/*#if (BIT_TIME * 180 > 65535)
 #error "Timer wraps over a CAN frame"
-#endif
+#endif*/
 
 // Size of the counter (usually 16-bit or 32-bit)
 typedef uint16_t ctr_t;

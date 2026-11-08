@@ -122,6 +122,30 @@ if (EXISTS MIN_PROTOCOL)
     )
 endif()
 
+if (EXISTS CANHACK_FD)
+    message(STATUS "CANHACK_FD")
+    # Build stamp (UTC, with seconds) captured at configure time -- do a clean
+    # configure (rm -rf build-<board>) to refresh it. The canhack_fd git hash is
+    # taken from the CANHACK_FD_GITHASH environment variable because the build runs
+    # in the MicroPython tree, not the canhack_fd checkout; set it before building:
+    #   export CANHACK_FD_GITHASH="$(git -C <canhack_fd> rev-parse --short HEAD)"
+    string(TIMESTAMP CANHACK_FD_BUILD_UTC "%Y-%m-%d %H:%M:%S" UTC)
+    if (DEFINED ENV{CANHACK_FD_GITHASH})
+        set(CANHACK_FD_GITHASH "$ENV{CANHACK_FD_GITHASH}")
+    else()
+        set(CANHACK_FD_GITHASH "unknown")
+    endif()
+    message(STATUS "CANHACK_FD build ${CANHACK_FD_BUILD_UTC} UTC  git ${CANHACK_FD_GITHASH}")
+    # Write the stamp into a generated header (CMAKE_BINARY_DIR is already on the include
+    # path). This avoids passing a string with spaces through a -D compiler flag.
+    file(WRITE ${CMAKE_BINARY_DIR}/canhack_fd_build.h
+        "#define CANHACK_FD_BUILD_UTC \"${CANHACK_FD_BUILD_UTC}\"\n#define CANHACK_FD_GITHASH \"${CANHACK_FD_GITHASH}\"\n")
+    target_compile_definitions(${MICROPY_TARGET} PRIVATE
+        CANHACK_FD=1
+        CANHACK_FD_HAVE_BUILD_H=1
+    )
+endif()
+
 if(CAN)
     message(STATUS "CAN enabled")
     set(CANDRIVERS_PATH ${MICROPY_DIR}/lib/canis-can-sdk)
@@ -561,7 +585,6 @@ target_sources(${MICROPY_TARGET} PRIVATE
     ${MICROPY_SOURCE_LIB}
     ${MICROPY_SOURCE_DRIVERS}
     ${MICROPY_SOURCE_PORT}
-${MIN_SOURCE_LIB}
 )
 
 target_link_libraries(${MICROPY_TARGET} micropy_lib_mbedtls)

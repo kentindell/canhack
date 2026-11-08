@@ -9,6 +9,17 @@ This repository contains tools and resources for the <b>Yes We CAN</b> project o
 
 Canis Labs CTO Dr. Ken Tindell writes about CAN on his blog at: https://kentindell.github.io
 
+## CAN FD extension
+
+This adds experimental **CAN FD** support to the CANHack toolkit (bit-banged, fixed
+500 kbit/s arbitration / 2 Mbit/s data), from the bachelor thesis of Fynn Denecke.
+
+- Build it from the repository root with **`./build.sh`** — see **[BUILDING.md](BUILDING.md)**
+  for prerequisites (gcc/cmake/Arm toolchain) and how to point the build at your compiler.
+  MicroPython is pinned as a git submodule, so the build fetches its own dependencies.
+- Current hardware-verified status, known limits and a scope/PCAN test plan:
+  **[CANPico/firmware/CANFD_STATUS.md](CANPico/firmware/CANFD_STATUS.md)**.
+
 ## Canis Labs CANPico hardware support
 
 MicroPython firmware and documentation is in the `CANPico` folder. In addition, there is support for
@@ -39,6 +50,7 @@ for the following hardware:
 - Canis Labs [CANPico board](https://canislabs.com/canpico/)
 - Canis Labs CANHack board (this uses the same firmware as the CANPico)
 - Car Hacking Village DEF CON 30 badge
+- Oliver @hartkopp 's [bit-bang-only](docs/BitBangOnlyPico.md) low-cost setup
 
 The MicroPython firmware for the CHV DEF CON 30 badge is located in:
 

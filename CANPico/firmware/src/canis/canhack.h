@@ -82,29 +82,38 @@
 #include CANHACK_BOARD_H
 #include <stdio.h>
 
-#define CANHACK_MAX_BITS                        (160U)
+#ifdef CANHACK_FD
+#define CANHACK_MAX_BITS    700U
+#else
+#define CANHACK_MAX_BITS    160U
+#endif
 
 /// Structure that defines a CAN frame parameters
 typedef struct {
     uint8_t tx_bitstream[CANHACK_MAX_BITS];     ///< The bitstream of the CAN frame
     bool stuff_bit[CANHACK_MAX_BITS];           ///< Indicates if the corresponding bit is a stuff bit
-    uint8_t tx_bits;                            ///< Number of  bits in the frame
+    uint32_t tx_bits;                           ///< Number of  bits in the frame
     uint32_t tx_arbitration_bits;               ///< Number of bits in arbitartion (including stuff bits); the fields are ID A + RTR (standard) or ID A + SRR + IDE + ID B + RTR (extended)
 
     // Fields set when creating the CAN frame
-    uint32_t crc_rg;                            ///< CRC value (15 bit value)
+    uint32_t crc_rg;                            ///< CRC value (15 (normal CAN), 17 (CAN FD =< 16 bytes data) or 21 (CAN FD > 16 bytes data) bit value)
     uint32_t last_arbitration_bit;              ///< Bit index of last arbitration bit (always the RTR bit for both IDE = 0 and IDE = 1); may be a stuff bit
+    uint32_t brs_bit;                           ///< Bit index of the Bit Rate Switch bit in FD Frames
     uint32_t last_dlc_bit;                      ///< Bit index of last bit of DLC field; may be a stuff bit
     uint32_t last_data_bit;                     ///< Bit index of the last bit of the data field; may be a stuff bit
     uint32_t last_crc_bit;                      ///< Bit index of last bit of the CRC field; may be a stuff bit
-    uint32_t last_eof_bit;                      ///< Bit index of the last bit of the EOF field; may be a stuff bit
+    uint32_t last_eof_bit;                      ///< Bit index of the last bit of the EOF field
     bool frame_set;                             ///< True when the frame has been set; may be a stuff bit
+    bool fd;                                    ///< True when it's a CAN FD frame
+    bool brs;
 
     // Fields used during creation of the CAN frame
     uint32_t dominant_bits;                     ///< Dominant bits in a row
     uint32_t recessive_bits;                    ///< Recessive bits in a row
+    uint8_t stuff_count;                        ///< Stuff count for CAN FD
     bool stuffing;                              ///< True if stuffing enabled
     bool crcing;                                ///< True if CRCing enabled
+
 } canhack_frame_t;
 
 /// \brief Initialize CANHack toolkit
@@ -118,7 +127,7 @@ void canhack_init(void);
 /// \param dlc DLC field; data length if a data frame, arbitrary 4-bit value if a remote frame
 /// \param data pointer to up to 8 bytes of payload
 /// \param frame the handle to the frame (see canhack_get_frame)
-void canhack_set_frame(uint32_t id_a, uint32_t id_b, bool rtr, bool ide, uint32_t dlc, const uint8_t *data, canhack_frame_t *frame);
+void canhack_set_frame(uint32_t id_a, uint32_t id_b, bool rtr, bool ide, uint32_t dlc, const uint8_t *data, canhack_frame_t *frame, bool fd, bool brs, bool esi);
 
 /// \brief Get handle to frame
 /// \param second true if frame 2 is wanted
@@ -132,7 +141,8 @@ void canhack_set_attack_masks(void);
 void canhack_send_square_wave(void);
 
 /// \brief Send to the CAN TX pin what is seen on the CAN RX pin (used for testing)
-void canhack_loopback(void);
+/// \param fd Whether to extend the loopback to 700 Bit Times for CAN FD loopback
+void canhack_loopback(bool fd);
 
 /// \brief Send a CAN frame to the CAN bus without waiting for 11 idle bits or syncing with SOF
 void canhack_send_raw_frame(void);
@@ -148,7 +158,7 @@ bool canhack_send_frame(uint32_t retries, bool second);
 /// \param split_time Time when phase 1 bit value is set to phase 2 bit value
 /// \param retries Number of times the frame should be re-entered into arbitration (after losing or after an error)
 /// \return
-bool canhack_send_janus_frame(ctr_t sync_time, ctr_t split_time, uint32_t retries);
+bool canhack_send_janus_frame(ctr_t sync_time, ctr_t split_time, ctr_t sync_time_fd, ctr_t split_time_fd, uint32_t retries);
 
 /// \brief Send a spoofed frame just after the target frame ends
 /// \param janus True if the spoof is a Janus frame
@@ -156,7 +166,7 @@ bool canhack_send_janus_frame(ctr_t sync_time, ctr_t split_time, uint32_t retrie
 /// \param split_time Time when phase 1 bit value is set to phase 2 bit value (if a Janus frame)
 /// \param retries Number of times the frame should be re-entered into arbitration (after losing or after an error)
 /// \return True if frame was sent OK, false if timed out or too many retries
-bool canhack_spoof_frame(bool janus, ctr_t sync_time, ctr_t split_time, uint32_t retries);
+bool canhack_spoof_frame(bool janus, ctr_t sync_time, ctr_t split_time, ctr_t sync_time_fd, ctr_t split_time_fd, uint32_t retries);
 
 /// \brief Overwrite the target frame (sender must be in error passive mode)
 /// \param loopback_offset Time to shift the bit pattern to align with the spoofed frame

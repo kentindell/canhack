@@ -152,7 +152,10 @@ STATIC mp_obj_t rp2_canhack_set_frame(mp_uint_t n_args, const mp_obj_t *pos_args
             { MP_QSTR_set_dlc,   MP_ARG_KW_ONLY  | MP_ARG_BOOL, {.u_bool = false} },
             { MP_QSTR_dlc,       MP_ARG_KW_ONLY  | MP_ARG_INT,  {.u_int  = 0} },
             { MP_QSTR_second,    MP_ARG_KW_ONLY  | MP_ARG_BOOL, {.u_bool = false} },
-            { MP_QSTR_no_ack,    MP_ARG_KW_ONLY | MP_ARG_BOOL, {.u_bool = false} },
+            { MP_QSTR_fd,        MP_ARG_KW_ONLY  | MP_ARG_BOOL, {.u_bool = false} },
+            { MP_QSTR_brs,       MP_ARG_KW_ONLY  | MP_ARG_BOOL, {.u_bool = true} },
+            { MP_QSTR_esi,       MP_ARG_KW_ONLY  | MP_ARG_BOOL, {.u_bool = true} },
+            { MP_QSTR_no_ack,    MP_ARG_KW_ONLY  | MP_ARG_BOOL, {.u_bool = false} },
     };
 
     // parse args
@@ -166,27 +169,59 @@ STATIC mp_obj_t rp2_canhack_set_frame(mp_uint_t n_args, const mp_obj_t *pos_args
     bool set_dlc = args[4].u_bool;
     // args[5] dealt with below
     bool second = args[6].u_bool;
-    bool no_ack = args[7].u_bool;
+    // Only relevant for CAN FD
+    bool fd = args[7].u_bool;
+    bool brs = args[8].u_bool;
+    bool esi = args[9].u_bool;
+    bool no_ack = args[10].u_bool;
+
+    if (fd & !FD_CONFIGURED) {
+        nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_ValueError, "CANHACK_FD not configured."));
+    }
+
+    if (!fd) {
+        brs = false;
+    }
 
     uint32_t len;
     uint32_t dlc;
-    uint8_t data[8];
+    uint8_t size = 8;
+    if (fd) {
+        size = 64;
+    }
+    uint8_t data[size];
 
     if(data_obj == mp_const_none) {
         len = 0;
     }
     else {
-        len = copy_mp_bytes(data_obj, data, 8U);
+        if (fd) {
+            len = copy_mp_bytes(data_obj, data, 64U);
+        } else {
+            len = copy_mp_bytes(data_obj, data, 8U);
+        }
+    }
+
+    for (uint16_t i = 0; i < size; i++) {
+        if (i >= len) {
+            data[i] = 0;
+        }
     }
 
     // DLC can be set if remote, but must have no payload
-    if(rtr && (len > 0)) {
+    if (rtr && (len > 0)) {
         nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_ValueError, "Remote frames cannot have a payload"));
     }
-    // 8 byte frames max
-    if (len > 8U) {
-        nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_ValueError, "Payload cannot be more than 8 bytes"));
-    }
+    // 64 / 8 byte frames max
+    if (fd) {
+        if (len > 64U) {
+            nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_ValueError, "Payload cannot be more than 64 bytes"));
+        }
+    } else {
+        if (len > 8U) {
+            nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_ValueError, "Payload cannot be more than 8 bytes"));
+        }
+    } 
 
     if (set_dlc) {
         dlc = args[5].u_int;
@@ -194,9 +229,20 @@ STATIC mp_obj_t rp2_canhack_set_frame(mp_uint_t n_args, const mp_obj_t *pos_args
         if (dlc > 15U) {
             nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_ValueError, "DLC must be <= 15"));
         }
-    }
-    else {
-        dlc = len;
+    } else {
+        if (fd & (len > 8)) {
+            if (len <= 24) {
+                dlc = (len+3) / 4U + 6U;
+            } 
+            else if (len <= 32) {
+                dlc = 13;
+            } 
+            else {
+                dlc = (len+15) / 16 + 11U;
+            }
+        } else {
+            dlc = len;
+        }
     }
 
     uint32_t id_a;
@@ -212,7 +258,7 @@ STATIC mp_obj_t rp2_canhack_set_frame(mp_uint_t n_args, const mp_obj_t *pos_args
         id_b =  0;
     }
     canhack_frame_t *frame = canhack_get_frame(second);
-    canhack_set_frame(id_a, id_b, rtr, ide, dlc, data, frame);
+    canhack_set_frame(id_a, id_b, rtr, ide, dlc, data, frame, fd, brs, esi);
 
     if (no_ack) {
         // If ACK=1 is wanted (i.e. a pure frame) then override the value created by the CANHack toolkit
@@ -369,6 +415,7 @@ STATIC mp_obj_t rp2_canhack_send_frame(mp_uint_t n_args, const mp_obj_t *pos_arg
         if (success) {
             repeat--;
         }
+        
         enable_irq();
         if (!success || repeat == 0) {
             break;
@@ -386,6 +433,8 @@ STATIC mp_obj_t rp2_canhack_send_janus_frame(mp_uint_t n_args, const mp_obj_t *p
     static const mp_arg_t allowed_args[] = {
             { MP_QSTR_sync_time,         MP_ARG_KW_ONLY  | MP_ARG_INT,  {.u_int = 50} },
             { MP_QSTR_split_time,        MP_ARG_KW_ONLY  | MP_ARG_INT,  {.u_int = 155} },
+            { MP_QSTR_sync_time_fd,      MP_ARG_KW_ONLY  | MP_ARG_INT,  {.u_int = 31} },
+            { MP_QSTR_split_time_fd,     MP_ARG_KW_ONLY  | MP_ARG_INT,  {.u_int = 78} },
             { MP_QSTR_timeout,           MP_ARG_KW_ONLY  | MP_ARG_INT,  {.u_int = 50000000U} },
             { MP_QSTR_retries,           MP_ARG_KW_ONLY  | MP_ARG_INT,  {.u_int = 0} },
     };
@@ -396,8 +445,10 @@ STATIC mp_obj_t rp2_canhack_send_janus_frame(mp_uint_t n_args, const mp_obj_t *p
     // Default to fractions of a bit time: 0-25% = sync time, 6.5%-62.5% = first bit, 62.5%-100% = second bit.
     uint32_t sync_time = args[0].u_int ? args[0].u_int : BIT_TIME / 4U;
     uint32_t split_time = args[1].u_int ? args[1].u_int : (BIT_TIME * 5U) / 8U;
-    uint32_t timeout = args[2].u_int;
-    uint32_t retries = args[3].u_int;
+    uint32_t sync_time_fd = args[2].u_int ? args[2].u_int : BIT_TIME_FD / 4U;
+    uint32_t split_time_fd = args[3].u_int ? args[3].u_int : (BIT_TIME_FD * 5U) / 8U;
+    uint32_t timeout = args[4].u_int;
+    uint32_t retries = args[5].u_int;
 
     canhack_frame_t *frame1 = canhack_get_frame(false);
     canhack_frame_t *frame2 = canhack_get_frame(true);
@@ -407,12 +458,18 @@ STATIC mp_obj_t rp2_canhack_send_janus_frame(mp_uint_t n_args, const mp_obj_t *p
     if (!frame2->frame_set) {
         nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_ValueError, "Second CAN frame has not been set"));
     }
+    if (frame1->brs != frame2->brs) {
+        nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_ValueError, "Varying Bit Rate Switching Options"));
+    }
+    if (frame1->brs & (frame1->brs_bit != frame2->brs_bit)) {
+        nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_ValueError, "BRS Bit needs to be at the same position"));
+    }
 
     // Disable interrupts around the library call because any interrupts will mess up the timing
     disable_irq();
     // Transmit the frame with a timeout (default: 65K bit times, or about 130ms at 500kbit/sec)
     canhack_set_timeout(timeout);
-    canhack_send_janus_frame(sync_time, split_time, retries);
+    canhack_send_janus_frame(sync_time, split_time, sync_time_fd, split_time_fd, retries);
     enable_irq();
 
     return mp_const_none;
@@ -426,6 +483,8 @@ STATIC mp_obj_t rp2_canhack_spoof_frame(mp_uint_t n_args, const mp_obj_t *pos_ar
             { MP_QSTR_overwrite,         MP_ARG_KW_ONLY  | MP_ARG_BOOL,  {.u_bool = false} },
             { MP_QSTR_sync_time,         MP_ARG_KW_ONLY  | MP_ARG_INT,  {.u_int = 0} },
             { MP_QSTR_split_time,        MP_ARG_KW_ONLY  | MP_ARG_INT,  {.u_int = 0} },
+            { MP_QSTR_sync_time_fd,      MP_ARG_KW_ONLY  | MP_ARG_INT,  {.u_int = 0} },
+            { MP_QSTR_split_time_fd,     MP_ARG_KW_ONLY  | MP_ARG_INT,  {.u_int = 0} },
             { MP_QSTR_second,            MP_ARG_KW_ONLY  | MP_ARG_BOOL,  {.u_bool = false} },
             { MP_QSTR_retries,           MP_ARG_KW_ONLY  | MP_ARG_INT,  {.u_int = 0} },
             { MP_QSTR_loopback_offset,   MP_ARG_KW_ONLY  | MP_ARG_INT,  {.u_int = DEFAULT_LOOPBACK_OFFSET} },
@@ -438,9 +497,11 @@ STATIC mp_obj_t rp2_canhack_spoof_frame(mp_uint_t n_args, const mp_obj_t *pos_ar
     bool overwrite = args[1].u_bool;
     uint32_t sync_time = args[2].u_int ? args[2].u_int : BIT_TIME / 4U;
     uint32_t split_time = args[3].u_int ? args[3].u_int : (BIT_TIME * 5U) / 8U;
-    bool second = args[4].u_bool;
-    uint32_t retries = args[5].u_int;
-    uint32_t loopback_offset = args[6].u_int;
+    uint32_t sync_time_fd = args[4].u_int ? args[4].u_int : BIT_TIME_FD / 4U;
+    uint32_t split_time_fd = args[5].u_int ? args[5].u_int : (BIT_TIME_FD * 5U) / 8U;
+    bool second = args[6].u_bool;
+    uint32_t retries = args[7].u_int;
+    uint32_t loopback_offset = args[8].u_int;
 
     canhack_frame_t *frame = canhack_get_frame(false);
     if (!frame->frame_set) {
@@ -475,7 +536,7 @@ STATIC mp_obj_t rp2_canhack_spoof_frame(mp_uint_t n_args, const mp_obj_t *pos_ar
         disable_irq();
         // Transmit a frame after detecting the target frame
         canhack_set_timeout(timeout);
-        canhack_spoof_frame(second, sync_time, split_time, retries);
+        canhack_spoof_frame(second, sync_time, split_time, sync_time_fd, split_time_fd, retries);
         enable_irq();
     }
 
@@ -612,12 +673,25 @@ STATIC mp_obj_t rp2_canhack_square_wave(mp_obj_t self_in)
 STATIC MP_DEFINE_CONST_FUN_OBJ_1(rp2_canhack_square_wave_obj, rp2_canhack_square_wave);
 
 
-STATIC mp_obj_t rp2_canhack_loopback(mp_obj_t self_in)
-{
-    canhack_loopback();
+STATIC mp_obj_t rp2_canhack_loopback(mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args)
+ {
+    static const mp_arg_t allowed_args[] = {
+            { MP_QSTR_fd,           MP_ARG_KW_ONLY  | MP_ARG_BOOL,  {.u_int = false} },
+    };
+
+    mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
+    mp_arg_parse_all(n_args - 1, pos_args + 1, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
+
+    bool fd = args[0].u_bool;
+    if (fd & !FD_CONFIGURED) {
+        nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_ValueError, "CANHACK_FD not configured."));
+    }
+
+    canhack_loopback(fd);
+
     return mp_const_none;
 }
-STATIC MP_DEFINE_CONST_FUN_OBJ_1(rp2_canhack_loopback_obj, rp2_canhack_loopback);
+STATIC MP_DEFINE_CONST_FUN_OBJ_KW(rp2_canhack_loopback_obj, 1, rp2_canhack_loopback);
 
 
 STATIC mp_obj_t rp2_canhack_get_clock(mp_obj_t self_in)
@@ -636,12 +710,12 @@ STATIC mp_obj_t rp2_canhack_reset_clock(mp_obj_t self_in)
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_1(rp2_canhack_reset_clock_obj, rp2_canhack_reset_clock);
 
-ctr_t ts[160];
+ctr_t ts[CANHACK_MAX_BITS];
 
 __attribute__((noinline, long_call, section(".time_critical"))) void send_raw_frame(canhack_frame_t *frame )
 {
-    uint8_t tx_index = 1U;
-    uint8_t ts_index = 3U;
+    uint16_t tx_index = 1U;
+    uint16_t ts_index = 3U;
     ctr_t bit_end;
     uint8_t tx = frame->tx_bitstream[tx_index++];
 
@@ -687,9 +761,38 @@ STATIC mp_obj_t rp2_canhack_send_raw(mp_obj_t self_in)
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_1(rp2_canhack_send_raw_obj, rp2_canhack_send_raw);
 
+// Report the firmware build stamp and canhack_fd git hash (uname-like), e.g.
+//   >>> ch.build_info()
+//   'canhack_fd g1a2b3c4 built 2026-10-21 14:59:12 UTC'
+#ifdef CANHACK_FD_HAVE_BUILD_H
+#include "canhack_fd_build.h"
+#endif
+#ifndef CANHACK_FD_BUILD_UTC
+#define CANHACK_FD_BUILD_UTC "unknown"
+#endif
+#ifndef CANHACK_FD_GITHASH
+#define CANHACK_FD_GITHASH "unknown"
+#endif
+STATIC mp_obj_t rp2_canhack_build_info(mp_obj_t self_in)
+{
+    (void)self_in;
+    char buf[96];
+    int n = snprintf(buf, sizeof(buf), "canhack_fd %s built %s UTC",
+                     CANHACK_FD_GITHASH, CANHACK_FD_BUILD_UTC);
+    if (n < 0) {
+        n = 0;
+    }
+    if (n > (int)sizeof(buf) - 1) {
+        n = (int)sizeof(buf) - 1;
+    }
+    return mp_obj_new_str(buf, (size_t)n);
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_1(rp2_canhack_build_info_obj, rp2_canhack_build_info);
+
 
 STATIC const mp_map_elem_t rp2_canhack_locals_dict_table[] = {
         // instance methods
+        { MP_OBJ_NEW_QSTR(MP_QSTR_build_info), (mp_obj_t)&rp2_canhack_build_info_obj },
         { MP_OBJ_NEW_QSTR(MP_QSTR_init), (mp_obj_t)&rp2_canhack_init_obj },
         { MP_OBJ_NEW_QSTR(MP_QSTR_stop), (mp_obj_t)&rp2_canhack_stop_obj },
         { MP_OBJ_NEW_QSTR(MP_QSTR_set_frame), (mp_obj_t)&rp2_canhack_set_frame_obj },
